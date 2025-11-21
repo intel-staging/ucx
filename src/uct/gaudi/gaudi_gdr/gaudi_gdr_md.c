@@ -45,6 +45,9 @@ static void uct_gaudi_md_close(uct_md_h uct_md)
     if (md->dmabuf_fd >= 0) {
         close(md->dmabuf_fd);
     }
+    if (md->fd >= 0) {
+        close(md->fd);
+    }        
     ucs_free(md);
 }
 
@@ -184,7 +187,7 @@ uct_gaudi_md_open(uct_component_h component, const char *md_name,
         goto err_close_dmabuf;
     }
 
-    md->fd              = fd;
+    md->fd              = dup(fd);
     md->super.ops       = &md_ops;
     md->super.component = &uct_gaudi_gdr_component;
 

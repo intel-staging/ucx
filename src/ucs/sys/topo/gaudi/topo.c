@@ -38,6 +38,9 @@
 #define GAUDI_DEVICE_NAME_LEN              10
 
 static pthread_mutex_t gaudi_init_mutex = PTHREAD_MUTEX_INITIALIZER;
+/* File-scope one-time control and status */
+static pthread_once_t gaudi_spinlock_once_flag = PTHREAD_ONCE_INIT;
+static ucs_status_t gaudi_spinlock_init_status = UCS_OK;
 
 static const ucs_sys_dev_distance_t gaudi_fallback_node_distance =
         {.latency = 100e-9, .bandwidth = 17e9}; /* 100ns, 17 GB/s */
@@ -1272,12 +1275,12 @@ static ucs_status_t ucs_gaudi_build_assignment_balanced()
     }
 
     /* Count devices per NUMA node */
-    for (i = 0; i < num_gaudi_devices; ++i) {
+    for (i = 0; i < num_gaudi_devices; i++) {
         numa_node = ucs_gaudi_get_validated_numa_node(
                 ucs_gaudi_topo_ctx.gaudi_devices[i], num_numa_nodes);
         gaudi_per_numa[numa_node]++;
     }
-    for (i = 0; i < num_hnic_devices; ++i) {
+    for (i = 0; i < num_hnic_devices; i++) {
         numa_node = ucs_gaudi_get_validated_numa_node(
                 ucs_gaudi_topo_ctx.hnic_devices[i], num_numa_nodes);
         hnic_per_numa[numa_node]++;
@@ -1539,7 +1542,7 @@ ucs_status_t ucs_gaudi_find_best_connection(const char *accel_name,
     ucs_spin_lock(&ucs_gaudi_topo_ctx.lock);
 
     /* Return cached balanced assignment instead of searching connections */
-    for (i = 0; i < ucs_gaudi_topo_ctx.num_gaudi_devices; ++i) {
+    for (i = 0; i < ucs_gaudi_topo_ctx.num_gaudi_devices; i++) {
         if (!strcmp(accel_name, ucs_gaudi_topo_ctx.gaudi_devices_names[i])) {
             break;
         }
@@ -1686,7 +1689,7 @@ static void ucs_gaudi_get_memory_distance(ucs_sys_device_t device,
     /* Sum NUMA distances for CPUs in affinity set */
     num_cpus       = ucs_numa_num_configured_cpus();
     total_distance = 0;
-    for (cpu = 0; cpu < num_cpus; ++cpu) {
+    for (cpu = 0; cpu < num_cpus; cpu++) {
         if (!full_affinity && !CPU_ISSET(cpu, &thread_cpuset)) {
             continue;
         }
@@ -1712,10 +1715,15 @@ static void ucs_gaudi_get_memory_distance(ucs_sys_device_t device,
     distance->latency = (total_distance / cpuset_size) * 10e-9;
 }
 
+/* Initialize spinlock exactly once */
+static void ucs_gaudi_spinlock_once_init()
+{
+    gaudi_spinlock_init_status = ucs_spinlock_init(&ucs_gaudi_topo_ctx.lock, 0);
+}
+
 /* Initialization function */
 void ucs_gaudi_topo_init()
 {
-    ucs_status_t status;
     const char *disable;
 
     disable = getenv("UCS_GAUDI_TOPO_DISABLE");
@@ -1730,17 +1738,16 @@ void ucs_gaudi_topo_init()
         return;
     }
 
+    /* Ensure spinlock exists even if lazy init is first */
+    pthread_once(&gaudi_spinlock_once_flag, ucs_gaudi_spinlock_once_init);
+    if (gaudi_spinlock_init_status != UCS_OK) {
+        ucs_error("Failed to initialize spinlock: %s",
+                  ucs_status_string(gaudi_spinlock_init_status));
+        return;
+    }
+
     pthread_mutex_lock(&gaudi_init_mutex);
     if (!ucs_gaudi_topo_ctx.provider_added) {
-        /* Initialize spinlock first */
-        status = ucs_spinlock_init(&ucs_gaudi_topo_ctx.lock, 0);
-        if (status != UCS_OK) {
-            pthread_mutex_unlock(&gaudi_init_mutex);
-            ucs_error("Failed to initialize spinlock: %s",
-                      ucs_status_string(status));
-            return;
-        }
-
         ucs_debug("Registering Gaudi topology provider");
         ucs_list_add_head(&ucs_sys_topo_providers_list,
                           &ucs_gaudi_topo_provider.list);
@@ -1761,6 +1768,14 @@ static ucs_status_t ucs_gaudi_lazy_init()
     if (disable && strcmp(disable, "0") != 0) {
         ucs_debug("Gaudi topology provider disabled by UCS_GAUDI_TOPO_DISABLE");
         return UCS_ERR_UNSUPPORTED;
+    }
+
+    /* Ensure spinlock exists */
+    pthread_once(&gaudi_spinlock_once_flag, ucs_gaudi_spinlock_once_init);
+    if (gaudi_spinlock_init_status != UCS_OK) {
+        ucs_error("Failed to initialize spinlock: %s",
+                  ucs_status_string(gaudi_spinlock_init_status));
+        return gaudi_spinlock_init_status;
     }
 
     ucs_spin_lock(&ucs_gaudi_topo_ctx.lock);
@@ -1891,9 +1906,6 @@ void ucs_gaudi_topo_cleanup()
     ucs_gaudi_topo_ctx.have_assignment   = 0;
 
     ucs_spin_unlock(&ucs_gaudi_topo_ctx.lock);
-    ucs_spinlock_destroy(&ucs_gaudi_topo_ctx.lock);
-
     pthread_mutex_unlock(&gaudi_init_mutex);
-
     ucs_debug("Gaudi topology cleaned up");
 }

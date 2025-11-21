@@ -101,8 +101,12 @@ static ucs_status_t uct_gaudi_md_mem_query(uct_md_h md, const void *addr,
     }
 
     if (mem_attr_p->field_mask & UCT_MD_MEM_ATTR_FIELD_DMABUF_FD) {
-        mem_attr_p->dmabuf_fd = dup(dmabuf_fd);
-    }
+        int dup_fd = dup(dmabuf_fd);
+        if (dup_fd < 0) {
+            return UCS_ERR_IO_ERROR;
+        }
+        mem_attr_p->dmabuf_fd = dup_fd;
+    }    
 
     if (mem_attr_p->field_mask & UCT_MD_MEM_ATTR_FIELD_DMABUF_OFFSET) {
         mem_attr_p->dmabuf_offset = UCS_PTR_BYTE_DIFF(mem_info.base_address,
@@ -191,11 +195,9 @@ uct_gaudi_md_open(uct_component_h component, const char *md_name,
     return UCS_OK;
 
 err_close_dmabuf:
-    if (md->dmabuf_fd >= 0) {
-        close(md->dmabuf_fd);
-    }
+    uct_gaudi_base_close_dmabuf_fd(md->dmabuf_fd);
 err_close_fd:
-    close(fd);
+    uct_gaudi_base_close_fd(fd, fd_created);
 err_free_md:
     ucs_free(md);
     return status;    

@@ -27,23 +27,19 @@ void ucs_gaudi_topo_init(void);
 void ucs_gaudi_topo_cleanup(void);
 
 /**
- * Get device index from module ID.
+ * Get Gaudi device index from a given module ID.
  *
  * Searches /sys/class/accel for the "accel<N>" directory whose module_id
  * attribute matches the supplied value and returns the numeric index <N>.
  *
  * @param [in] module_id  Gaudi module identifier to query.
  *
- * @return Non-negative device index on success.
+ * @return Non-negative Device index on success, -1 on failure
+ *         (error details printed via ucs_error).
  *
- * @retval -ENODEV           No matching Gaudi accelerator was found.
- * @retval UCS_ERR_IO_ERROR  I/O error while accessing sysfs (e.g., opendir/readdir).
- * @retval <0                Other negative UCX status codes may be returned
- *                           in case of unexpected failures while reading
- *                           attributes from sysfs.
- *
- * @note On success the return value is a zero-based index parsed from the
- *       "accel<N>" directory name. On failure a negative error code is returned.
+ * @note On success, the return value is a zero-based index parsed from the
+ *       "accel<N>" directory name. On failure, -1 is returned and the error
+ *       is logged using ucs_error().
  */
 int ucs_gaudi_get_index_from_module_id(uint32_t module_id);
 

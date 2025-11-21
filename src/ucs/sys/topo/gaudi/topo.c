@@ -303,7 +303,7 @@ ucs_gaudi_read_module_id(const char *accel_name, uint32_t *module_id)
     return UCS_OK;
 }
 
-/* Get Gaudi device index from module ID. */
+/* Get Gaudi device index from a given module ID. */
 int ucs_gaudi_get_index_from_module_id(uint32_t module_id)
 {
     DIR *dir;
@@ -314,12 +314,13 @@ int ucs_gaudi_get_index_from_module_id(uint32_t module_id)
 
     dir = opendir(UCS_GAUDI_TOPO_ACCEL_PATH);
     if (!dir) {
-        ucs_error("Failed to open directory %s", UCS_GAUDI_TOPO_ACCEL_PATH);
-        return UCS_ERR_IO_ERROR;
+        ucs_error("Failed to open directory %s: %s", UCS_GAUDI_TOPO_ACCEL_PATH,
+                  strerror(errno));
+        return -1;
     }
 
-    /* POSIX error code 19, "No such device."" */
-    device_id = -ENODEV;
+    /* Default: not found */
+    device_id = -1;
     while ((entry = readdir(dir)) != NULL) {
         if (strncmp(entry->d_name, "accel", 5) != 0 ||
             strncmp(entry->d_name, "accel_", 6) == 0) {
@@ -336,11 +337,13 @@ int ucs_gaudi_get_index_from_module_id(uint32_t module_id)
             break;
         }
     }
+
     closedir(dir);
 
     if (device_id < 0) {
-        ucs_debug("no Gaudi accelerator with module_id %u found", module_id);
+        ucs_error("no Gaudi accelerator with module_id %u found", module_id);
     }
+
     return device_id;
 }
 

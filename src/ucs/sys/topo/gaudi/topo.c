@@ -500,10 +500,7 @@ static ucs_status_t ucs_gaudi_enumerate_devices()
 out:
     /*
      * Memory is freed ONLY on allocation failure (UCS_ERR_NO_MEMORY).
-     * For all other errors, allocations are INTENTIONALLY PRESERVED.
-     * This allows inspection of partial enumeration results and ensures
-     * proper cleanup by the module destructor, not this function.
-     * This is a deliberate design choice, not a leak.
+     * For other errors, no allocations were made, so nothing to free.
      */
     if (status == UCS_ERR_NO_MEMORY) {
         ucs_free(ucs_gaudi_topo_ctx.gaudi_devices);

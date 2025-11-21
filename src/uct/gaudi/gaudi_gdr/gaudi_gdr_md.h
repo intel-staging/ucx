@@ -6,6 +6,7 @@
 #ifndef GAUDI_MD_H
 #define GAUDI_MD_H
 
+#include <stdbool.h>
 #include <uct/base/uct_md.h>
 #include <ucs/config/types.h>
 
@@ -14,6 +15,7 @@ extern uct_component_t uct_gaudi_gdr_component;
 typedef struct uct_gaudi_md {
     uct_md_t            super;
     int                 fd;
+    bool                fd_created;
     uint64_t            device_base_allocated_address;
     uint64_t            device_base_address;
     uint64_t            totalSize;

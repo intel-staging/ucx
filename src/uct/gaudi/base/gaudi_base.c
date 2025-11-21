@@ -20,14 +20,35 @@
 #include <hlthunk.h>
 #include <synapse_api.h>
 
-int uct_gaudi_base_get_fd(int device_id) {
+int uct_gaudi_base_get_fd(int device_id, bool *fd_created) {
     synDeviceInfo deviceInfo;
 
     if (synDeviceGetInfo(-1, &deviceInfo) != synSuccess) {
-       return hlthunk_open_by_module_id(device_id);
+        int fd = hlthunk_open_by_module_id(device_id);
+        if (fd <0) {
+            ucs_info("Failed to get device fd via hlthunk_open_by_module_id, id %d", device_id);
+	         fd = hlthunk_open(HLTHUNK_DEVICE_DONT_CARE, NULL);
+        }
+
+        if (fd >=0 && fd_created != NULL) {
+            *fd_created = true;
+        }
+        return fd;
     }
 
     return deviceInfo.fd;
+}
+
+void uct_gaudi_base_close_fd(int fd, bool fd_created) {
+    if (fd_created && fd >= 0) {
+        hlthunk_close(fd);
+    }
+}
+
+void uct_gaudi_base_close_dmabuf_fd(int fd) {
+    if (fd >= 0) {
+        close(fd);
+    }
 }
 
 ucs_status_t uct_gaudi_base_get_sysdev(int fd, ucs_sys_device_t* sys_dev) {

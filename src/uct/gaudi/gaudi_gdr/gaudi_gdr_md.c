@@ -42,12 +42,8 @@ static ucs_status_t uct_gaudi_md_query(uct_md_h md, uct_md_attr_v2_t *attr)
 static void uct_gaudi_md_close(uct_md_h uct_md)
 {
     uct_gaudi_md_t *md = ucs_derived_of(uct_md, uct_gaudi_md_t);
-    if (md->dmabuf_fd >= 0) {
-        close(md->dmabuf_fd);
-    }
-    if (md->fd >= 0) {
-        close(md->fd);
-    }        
+    uct_gaudi_base_close_dmabuf_fd(md->dmabuf_fd);
+    uct_gaudi_base_close_fd(md->fd, md->fd_created);
     ucs_free(md);
 }
 
@@ -156,6 +152,7 @@ uct_gaudi_md_open(uct_component_h component, const char *md_name,
                                                      uct_gaudi_md_config_t);
     uct_gaudi_md_t *md;
     ucs_status_t status;
+    bool fd_created = false;
     int fd;
 
     md = ucs_malloc(sizeof(uct_gaudi_md_t), "uct_gaudi_md_t");
@@ -164,7 +161,7 @@ uct_gaudi_md_open(uct_component_h component, const char *md_name,
         return UCS_ERR_NO_MEMORY;
     }
 
-    fd = uct_gaudi_base_get_fd(config->device_id);
+    fd = uct_gaudi_base_get_fd(config->device_id, &fd_created);
     if (fd <0) {
         ucs_error("Failed to get device fd");
 	    status = UCS_ERR_NO_DEVICE;
@@ -187,7 +184,8 @@ uct_gaudi_md_open(uct_component_h component, const char *md_name,
         goto err_close_dmabuf;
     }
 
-    md->fd              = dup(fd);
+    md->fd              = fd;
+    md->fd_created      = fd_created;
     md->super.ops       = &md_ops;
     md->super.component = &uct_gaudi_gdr_component;
 

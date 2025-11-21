@@ -6,11 +6,14 @@
 #ifndef GAUDI_BASE_H_
 #define GAUDI_BASE_H_
 
+#include <stdbool.h>
 #include <uct/base/uct_iface.h>
 #include <uct/base/uct_md.h>
 #include "scal.h"
 
-int uct_gaudi_base_get_fd(int device_id);
+int uct_gaudi_base_get_fd(int device_id, bool *fd_created);
+void uct_gaudi_base_close_fd(int fd, bool fd_created);
+void uct_gaudi_base_close_dmabuf_fd(int fd);
 ucs_status_t uct_gaudi_base_get_sysdev(int fd, ucs_sys_device_t* sys_dev);
 ucs_status_t uct_gaudi_base_get_info(int fd, uint64_t *device_base_allocated_address, uint64_t *device_base_address,
                                 uint64_t *totalSize, int *dmabuf_fd);

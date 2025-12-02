@@ -6,20 +6,27 @@
 if HAVE_GAUDI
 
 SUBDIRS = .
+if ENABLE_GAUDI_TOPO_API
+SUBDIRS += api
+endif
 
 module_LTLIBRARIES       = libuct_gaudi.la
-libuct_gaudi_la_CPPFLAGS = $(BASE_CPPFLAGS) $(GAUDI_CPPFLAGS)
+libuct_gaudi_la_CPPFLAGS = $(BASE_CPPFLAGS) $(GAUDI_CPPFLAGS) \
+                          -I$(top_srcdir)/src/uct/gaudi/api
 libuct_gaudi_la_CFLAGS   = $(BASE_CFLAGS) $(LT_CFLAGS)
 libuct_gaudi_la_LIBADD   = $(top_builddir)/src/ucs/libucs.la \
-                          $(top_builddir)/src/uct/libuct.la
+                           $(top_builddir)/src/uct/libuct.la
 libuct_gaudi_la_LDFLAGS  = $(GAUDI_LDFLAGS) $(GAUDI_LIBS) -version-info $(SOVERSION)
 
 noinst_HEADERS = \
         base/scal.h \
         base/gaudi_base.h
 
+EXTRA_DIST = api/gaudi_topo.h
+
 libuct_gaudi_la_SOURCES = \
-        base/gaudi_base.c
+    base/gaudi_base.c \
+    base/gaudi_topo.c
 
 noinst_HEADERS += \
     gaudi_gdr/gaudi_gdr_md.h \

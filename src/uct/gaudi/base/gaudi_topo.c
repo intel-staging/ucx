@@ -1,6 +1,5 @@
 /**
 * Copyright (C) Intel Corporation, 2025. ALL RIGHTS RESERVED.
-*
 * See file LICENSE for terms.
 */
 
@@ -8,7 +7,7 @@
 #include "config.h"
 #endif
 
-#include "topo.h"
+#include "uct/gaudi/api/gaudi_topo.h"
 
 #include <ucs/config/global_opts.h>
 #include <ucs/debug/log.h>
@@ -26,15 +25,18 @@
 #include <sched.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <sys/stat.h>
 
+#ifdef HAVE_GAUDI_TOPO_API
+
 #define COMPARE(a, b)                      ((a) < (b) ? -1 : (a) > (b) ? 1 : 0)
-#define UCS_GAUDI_TOPO_ACCEL_PATH          "/sys/class/accel/"
-#define UCS_GAUDI_TOPO_INFINIBAND_PORT_FMT "/sys/class/infiniband/%s/ports/1/"
-#define UCS_GAUDI_TOPO_VENDOR_ID           0x1da3 /* Habana Labs Vendor ID */
-#define UCS_GAUDI_TOPO_MELLANOX_VENDOR_ID  0x15b3
-#define UCS_GAUDI_TOPO_BROADCOM_VENDOR_ID  0x14e4
+#define UCT_GAUDI_TOPO_ACCEL_PATH          "/sys/class/accel/"
+#define UCT_GAUDI_TOPO_INFINIBAND_PORT_FMT "/sys/class/infiniband/%s/ports/1/"
+#define UCT_GAUDI_TOPO_VENDOR_ID           0x1da3 /* Habana Labs Vendor ID */
+#define UCT_GAUDI_TOPO_MELLANOX_VENDOR_ID  0x15b3
+#define UCT_GAUDI_TOPO_BROADCOM_VENDOR_ID  0x14e4
 #define GAUDI_DEVICE_NAME_LEN              10
 
 static pthread_mutex_t gaudi_init_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -55,7 +57,7 @@ typedef struct {
     ucs_sys_dev_distance_t distance;
     ucs_numa_node_t common_numa_node;
     char gaudi_dev_name[GAUDI_DEVICE_NAME_LEN];
-} ucs_gaudi_connection_t;
+} uct_gaudi_connection_t;
 
 /* Static context for Gaudi topology */
 typedef struct {
@@ -68,14 +70,14 @@ typedef struct {
     ucs_sys_device_t *hnic_devices;
     uint16_t *hnic_vendor_ids;
     unsigned num_hnic_devices;
-    ucs_gaudi_connection_t *connections;
+    uct_gaudi_connection_t *connections;
     unsigned num_connections;
     ucs_sys_device_t *assigned_hnic_for_gaudi;
     int *assigned_port_for_gaudi;
     unsigned have_assignment;
-} ucs_gaudi_topo_ctx_t;
+} uct_gaudi_topo_ctx_t;
 
-static ucs_gaudi_topo_ctx_t ucs_gaudi_topo_ctx = {0};
+static uct_gaudi_topo_ctx_t uct_gaudi_topo_ctx = {0};
 
 /* Compatible definition of ucs_sys_topo_ops_t (from topo.c layout) */
 typedef struct {
@@ -94,31 +96,31 @@ typedef struct {
 } compatible_topo_provider_t;
 
 /* Forward declarations */
-static ucs_status_t ucs_gaudi_get_distance(ucs_sys_device_t device1,
+static ucs_status_t uct_gaudi_get_distance(ucs_sys_device_t device1,
                                            ucs_sys_device_t device2,
                                            ucs_sys_dev_distance_t *distance);
 
-static void ucs_gaudi_get_memory_distance(ucs_sys_device_t device,
+static void uct_gaudi_get_memory_distance(ucs_sys_device_t device,
                                           ucs_sys_dev_distance_t *distance);
 
-static ucs_status_t ucs_gaudi_lazy_init();
+static ucs_status_t uct_gaudi_lazy_init();
 
 static int
-ucs_gaudi_is_hnic_active(ucs_sys_device_t hnic_device, uint16_t hnic_vendor_id);
+uct_gaudi_is_hnic_active(ucs_sys_device_t hnic_device, uint16_t hnic_vendor_id);
 
 /* Gaudi topology provider (compatible structure) */
-static compatible_topo_provider_t ucs_gaudi_topo_provider = {
+static compatible_topo_provider_t uct_gaudi_topo_provider = {
         .name = "gaudi",
         .ops =
                 {
-                        .get_distance        = ucs_gaudi_get_distance,
-                        .get_memory_distance = ucs_gaudi_get_memory_distance,
+                        .get_distance        = uct_gaudi_get_distance,
+                        .get_memory_distance = uct_gaudi_get_memory_distance,
                 },
         .list = {NULL, NULL}};
 
 
 /* Helper function to construct sysfs path from ucs_sys_device_t */
-static ucs_status_t ucs_gaudi_sys_dev_to_sysfs_path(ucs_sys_device_t sys_dev,
+static ucs_status_t uct_gaudi_sys_dev_to_sysfs_path(ucs_sys_device_t sys_dev,
                                                     char *path, size_t max)
 {
     ucs_sys_bus_id_t bus_id;
@@ -159,7 +161,7 @@ static ucs_status_t ucs_gaudi_sys_dev_to_sysfs_path(ucs_sys_device_t sys_dev,
 
 /* Helper function to read PCI vendor ID from sysfs */
 static ucs_status_t
-ucs_gaudi_read_vendor_id(ucs_sys_device_t sys_dev, uint16_t *vendor_id)
+uct_gaudi_read_vendor_id(ucs_sys_device_t sys_dev, uint16_t *vendor_id)
 {
     char *path;
     char vendor_str[16];
@@ -174,7 +176,7 @@ ucs_gaudi_read_vendor_id(ucs_sys_device_t sys_dev, uint16_t *vendor_id)
         return status;
     }
 
-    status = ucs_gaudi_sys_dev_to_sysfs_path(sys_dev, path, PATH_MAX);
+    status = uct_gaudi_sys_dev_to_sysfs_path(sys_dev, path, PATH_MAX);
     if (status != UCS_OK) {
         ucs_debug("Failed to get sysfs path for device %d: %s", sys_dev,
                   ucs_status_string(status));
@@ -231,7 +233,7 @@ ucs_gaudi_read_vendor_id(ucs_sys_device_t sys_dev, uint16_t *vendor_id)
 
 /* Helper function to read PCI address from sysfs */
 static ucs_status_t
-ucs_gaudi_read_pci_addr(const char *accel_name, char *pci_addr, size_t max)
+uct_gaudi_read_pci_addr(const char *accel_name, char *pci_addr, size_t max)
 {
     char path[PATH_MAX];
     FILE *file;
@@ -239,7 +241,7 @@ ucs_gaudi_read_pci_addr(const char *accel_name, char *pci_addr, size_t max)
     size_t len;
 
     ucs_snprintf_safe(path, PATH_MAX, "%s%s/device/pci_addr",
-                      UCS_GAUDI_TOPO_ACCEL_PATH, accel_name);
+                      UCT_GAUDI_TOPO_ACCEL_PATH, accel_name);
 
     file = fopen(path, "r");
     if (!file) {
@@ -265,7 +267,7 @@ ucs_gaudi_read_pci_addr(const char *accel_name, char *pci_addr, size_t max)
 
 /* Helper function to read module ID from sysfs */
 static ucs_status_t
-ucs_gaudi_read_module_id(const char *accel_name, uint32_t *module_id)
+uct_gaudi_read_module_id(const char *accel_name, uint32_t *module_id)
 {
     char path[PATH_MAX];
     FILE *file;
@@ -274,7 +276,7 @@ ucs_gaudi_read_module_id(const char *accel_name, uint32_t *module_id)
     unsigned long val;
 
     ucs_snprintf_safe(path, PATH_MAX, "%s%s/device/module_id",
-                      UCS_GAUDI_TOPO_ACCEL_PATH, accel_name);
+                      UCT_GAUDI_TOPO_ACCEL_PATH, accel_name);
 
     file = fopen(path, "r");
     if (!file) {
@@ -298,13 +300,17 @@ ucs_gaudi_read_module_id(const char *accel_name, uint32_t *module_id)
         ucs_debug("Invalid module ID in %s: '%s'", path, buffer);
         return UCS_ERR_INVALID_PARAM;
     }
+    if (val > UINT32_MAX) {
+        ucs_debug("Module ID %lu exceeds uint32_t in %s", val, path);
+        return UCS_ERR_INVALID_PARAM;
+    }
 
     *module_id = (uint32_t)val;
     return UCS_OK;
 }
 
 /* Get Gaudi device index from a given module ID. */
-int ucs_gaudi_get_index_from_module_id(uint32_t module_id)
+int uct_gaudi_get_index_from_module_id(uint32_t module_id)
 {
     DIR *dir;
     struct dirent *entry;
@@ -312,9 +318,9 @@ int ucs_gaudi_get_index_from_module_id(uint32_t module_id)
     uint32_t read_module_id;
     int device_id;
 
-    dir = opendir(UCS_GAUDI_TOPO_ACCEL_PATH);
+    dir = opendir(UCT_GAUDI_TOPO_ACCEL_PATH);
     if (!dir) {
-        ucs_error("Failed to open directory %s: %s", UCS_GAUDI_TOPO_ACCEL_PATH,
+        ucs_error("Failed to open directory %s: %s", UCT_GAUDI_TOPO_ACCEL_PATH,
                   strerror(errno));
         return -1;
     }
@@ -327,7 +333,7 @@ int ucs_gaudi_get_index_from_module_id(uint32_t module_id)
             continue;
         }
 
-        status = ucs_gaudi_read_module_id(entry->d_name, &read_module_id);
+        status = uct_gaudi_read_module_id(entry->d_name, &read_module_id);
         if (status != UCS_OK) {
             continue;
         }
@@ -348,7 +354,7 @@ int ucs_gaudi_get_index_from_module_id(uint32_t module_id)
 }
 
 /* Enumerate Gaudi devices and HNICs */
-static ucs_status_t ucs_gaudi_enumerate_devices()
+static ucs_status_t uct_gaudi_enumerate_devices()
 {
     ucs_sys_device_t sys_dev;
     ucs_sys_bus_id_t bus_id;
@@ -363,9 +369,9 @@ static ucs_status_t ucs_gaudi_enumerate_devices()
     unsigned gaudi_idx;
     unsigned hnic_idx;
 
-    dir = opendir(UCS_GAUDI_TOPO_ACCEL_PATH);
+    dir = opendir(UCT_GAUDI_TOPO_ACCEL_PATH);
     if (!dir) {
-        ucs_error("Failed to open directory %s", UCS_GAUDI_TOPO_ACCEL_PATH);
+        ucs_error("Failed to open directory %s", UCT_GAUDI_TOPO_ACCEL_PATH);
         return UCS_ERR_IO_ERROR;
     }
 
@@ -376,7 +382,7 @@ static ucs_status_t ucs_gaudi_enumerate_devices()
     }
 
     /* Count Gaudi devices and HNICs */
-    ucs_gaudi_topo_ctx.num_gaudi_devices = 0;
+    uct_gaudi_topo_ctx.num_gaudi_devices = 0;
     while ((entry = readdir(dir)) != NULL) {
         if (strncmp(entry->d_name, "accel", 5) != 0 ||
             strncmp(entry->d_name, "accel_", 6) == 0) {
@@ -384,39 +390,39 @@ static ucs_status_t ucs_gaudi_enumerate_devices()
         }
 
         ucs_snprintf_safe(accel_path, PATH_MAX, "%s%s",
-                          UCS_GAUDI_TOPO_ACCEL_PATH, entry->d_name);
+                          UCT_GAUDI_TOPO_ACCEL_PATH, entry->d_name);
 
         if (stat(accel_path, &statbuf) == 0 && S_ISDIR(statbuf.st_mode)) {
             ucs_debug("Found Gaudi device: %s", entry->d_name);
-            ucs_gaudi_topo_ctx.num_gaudi_devices++;
+            uct_gaudi_topo_ctx.num_gaudi_devices++;
         }
     }
 
-    if (ucs_gaudi_topo_ctx.num_gaudi_devices == 0) {
+    if (uct_gaudi_topo_ctx.num_gaudi_devices == 0) {
         ucs_error("No Gaudi devices found under %s — aborting enumeration",
-                  UCS_GAUDI_TOPO_ACCEL_PATH);
+                  UCT_GAUDI_TOPO_ACCEL_PATH);
         status = UCS_ERR_NO_DEVICE;
         goto out;
     }
 
     /* Enumerate HNICs using UCX topo */
-    ucs_gaudi_topo_ctx.num_hnic_devices = 0;
+    uct_gaudi_topo_ctx.num_hnic_devices = 0;
     for (i = 0; i < ucs_topo_num_devices(); i++) {
         if (ucs_topo_get_device_bus_id(i, &bus_id) == UCS_OK) {
-            if (ucs_gaudi_read_vendor_id(i, &vendor_id) == UCS_OK) {
+            if (uct_gaudi_read_vendor_id(i, &vendor_id) == UCS_OK) {
                 /* Assume Mellanox and Broadcom devices are HNICs */
-                if (vendor_id == UCS_GAUDI_TOPO_MELLANOX_VENDOR_ID ||
-                    vendor_id == UCS_GAUDI_TOPO_BROADCOM_VENDOR_ID) {
+                if (vendor_id == UCT_GAUDI_TOPO_MELLANOX_VENDOR_ID ||
+                    vendor_id == UCT_GAUDI_TOPO_BROADCOM_VENDOR_ID) {
                     ucs_debug("Found HNIC device: %d (%s, active: %d)", i,
                               ucs_topo_sys_device_get_name(i),
-                              ucs_gaudi_is_hnic_active(i, vendor_id));
-                    ucs_gaudi_topo_ctx.num_hnic_devices++;
+                              uct_gaudi_is_hnic_active(i, vendor_id));
+                    uct_gaudi_topo_ctx.num_hnic_devices++;
                 }
             }
         }
     }
 
-    if (ucs_gaudi_topo_ctx.num_hnic_devices == 0) {
+    if (uct_gaudi_topo_ctx.num_hnic_devices == 0) {
         ucs_error("No HNIC devices found (no Mellanox/Broadcom NICs) — "
                   "aborting enumeration");
         status = UCS_ERR_NO_DEVICE;
@@ -424,22 +430,22 @@ static ucs_status_t ucs_gaudi_enumerate_devices()
     }
 
     /* Allocate arrays */
-    ucs_gaudi_topo_ctx.gaudi_devices =
-            ucs_calloc(ucs_gaudi_topo_ctx.num_gaudi_devices,
+    uct_gaudi_topo_ctx.gaudi_devices =
+            ucs_calloc(uct_gaudi_topo_ctx.num_gaudi_devices,
                        sizeof(ucs_sys_device_t), "gaudi_devices");
-    ucs_gaudi_topo_ctx.gaudi_devices_names =
-            ucs_calloc(ucs_gaudi_topo_ctx.num_gaudi_devices,
+    uct_gaudi_topo_ctx.gaudi_devices_names =
+            ucs_calloc(uct_gaudi_topo_ctx.num_gaudi_devices,
                        GAUDI_DEVICE_NAME_LEN, "gaudi_devices_names");
-    ucs_gaudi_topo_ctx.hnic_devices =
-            ucs_calloc(ucs_gaudi_topo_ctx.num_hnic_devices,
+    uct_gaudi_topo_ctx.hnic_devices =
+            ucs_calloc(uct_gaudi_topo_ctx.num_hnic_devices,
                        sizeof(ucs_sys_device_t), "hnic_devices");
-    ucs_gaudi_topo_ctx.hnic_vendor_ids =
-            ucs_calloc(ucs_gaudi_topo_ctx.num_hnic_devices, sizeof(uint16_t),
+    uct_gaudi_topo_ctx.hnic_vendor_ids =
+            ucs_calloc(uct_gaudi_topo_ctx.num_hnic_devices, sizeof(uint16_t),
                        "hnic_vendor_ids");
-    if (!ucs_gaudi_topo_ctx.gaudi_devices ||
-        !ucs_gaudi_topo_ctx.gaudi_devices_names ||
-        !ucs_gaudi_topo_ctx.hnic_devices ||
-        !ucs_gaudi_topo_ctx.hnic_vendor_ids) {
+    if (!uct_gaudi_topo_ctx.gaudi_devices ||
+        !uct_gaudi_topo_ctx.gaudi_devices_names ||
+        !uct_gaudi_topo_ctx.hnic_devices ||
+        !uct_gaudi_topo_ctx.hnic_vendor_ids) {
         status = UCS_ERR_NO_MEMORY;
         goto out;
     }
@@ -448,17 +454,17 @@ static ucs_status_t ucs_gaudi_enumerate_devices()
     gaudi_idx = 0;
     rewinddir(dir);
     while ((entry = readdir(dir)) != NULL &&
-           gaudi_idx < ucs_gaudi_topo_ctx.num_gaudi_devices) {
+           gaudi_idx < uct_gaudi_topo_ctx.num_gaudi_devices) {
         if (strncmp(entry->d_name, "accel", 5) != 0 ||
             strncmp(entry->d_name, "accel_", 6) == 0) {
             continue;
         }
 
         ucs_snprintf_safe(accel_path, PATH_MAX, "%s%s",
-                          UCS_GAUDI_TOPO_ACCEL_PATH, entry->d_name);
+                          UCT_GAUDI_TOPO_ACCEL_PATH, entry->d_name);
 
         if (stat(accel_path, &statbuf) == 0 && S_ISDIR(statbuf.st_mode)) {
-            status = ucs_gaudi_read_pci_addr(entry->d_name, pci_addr,
+            status = uct_gaudi_read_pci_addr(entry->d_name, pci_addr,
                                              sizeof(pci_addr));
             if (status != UCS_OK) {
                 ucs_debug("Skipping device %s due to PCI address read "
@@ -469,10 +475,10 @@ static ucs_status_t ucs_gaudi_enumerate_devices()
 
             status = ucs_topo_find_device_by_bdf_name(pci_addr, &sys_dev);
             if (status == UCS_OK) {
-                ucs_gaudi_topo_ctx.gaudi_devices[gaudi_idx] = sys_dev;
+                uct_gaudi_topo_ctx.gaudi_devices[gaudi_idx] = sys_dev;
                 ucs_topo_sys_device_set_name(sys_dev, entry->d_name, 1);
                 ucs_strncpy_safe(
-                        ucs_gaudi_topo_ctx.gaudi_devices_names[gaudi_idx],
+                        uct_gaudi_topo_ctx.gaudi_devices_names[gaudi_idx],
                         entry->d_name, GAUDI_DEVICE_NAME_LEN);
                 gaudi_idx++;
             } else {
@@ -485,14 +491,14 @@ static ucs_status_t ucs_gaudi_enumerate_devices()
     /* Populate HNIC devices */
     hnic_idx = 0;
     for (i = 0; i < ucs_topo_num_devices() &&
-                hnic_idx < ucs_gaudi_topo_ctx.num_hnic_devices;
+                hnic_idx < uct_gaudi_topo_ctx.num_hnic_devices;
          i++) {
         if (ucs_topo_get_device_bus_id(i, &bus_id) == UCS_OK) {
-            if (ucs_gaudi_read_vendor_id(i, &vendor_id) == UCS_OK) {
-                if (vendor_id == UCS_GAUDI_TOPO_MELLANOX_VENDOR_ID ||
-                    vendor_id == UCS_GAUDI_TOPO_BROADCOM_VENDOR_ID) {
-                    ucs_gaudi_topo_ctx.hnic_devices[hnic_idx]      = i;
-                    ucs_gaudi_topo_ctx.hnic_vendor_ids[hnic_idx++] = vendor_id;
+            if (uct_gaudi_read_vendor_id(i, &vendor_id) == UCS_OK) {
+                if (vendor_id == UCT_GAUDI_TOPO_MELLANOX_VENDOR_ID ||
+                    vendor_id == UCT_GAUDI_TOPO_BROADCOM_VENDOR_ID) {
+                    uct_gaudi_topo_ctx.hnic_devices[hnic_idx]      = i;
+                    uct_gaudi_topo_ctx.hnic_vendor_ids[hnic_idx++] = vendor_id;
                 }
             }
         }
@@ -506,18 +512,18 @@ out:
      * For other errors, no allocations were made, so nothing to free.
      */
     if (status == UCS_ERR_NO_MEMORY) {
-        ucs_free(ucs_gaudi_topo_ctx.gaudi_devices);
-        ucs_free(ucs_gaudi_topo_ctx.gaudi_devices_names);
-        ucs_free(ucs_gaudi_topo_ctx.hnic_devices);
-        ucs_free(ucs_gaudi_topo_ctx.hnic_vendor_ids);
+        ucs_free(uct_gaudi_topo_ctx.gaudi_devices);
+        ucs_free(uct_gaudi_topo_ctx.gaudi_devices_names);
+        ucs_free(uct_gaudi_topo_ctx.hnic_devices);
+        ucs_free(uct_gaudi_topo_ctx.hnic_vendor_ids);
 
-        ucs_gaudi_topo_ctx.gaudi_devices       = NULL;
-        ucs_gaudi_topo_ctx.gaudi_devices_names = NULL;
-        ucs_gaudi_topo_ctx.hnic_devices        = NULL;
-        ucs_gaudi_topo_ctx.hnic_vendor_ids     = NULL;
+        uct_gaudi_topo_ctx.gaudi_devices       = NULL;
+        uct_gaudi_topo_ctx.gaudi_devices_names = NULL;
+        uct_gaudi_topo_ctx.hnic_devices        = NULL;
+        uct_gaudi_topo_ctx.hnic_vendor_ids     = NULL;
 
-        ucs_gaudi_topo_ctx.num_gaudi_devices = 0;
-        ucs_gaudi_topo_ctx.num_hnic_devices  = 0;
+        uct_gaudi_topo_ctx.num_gaudi_devices = 0;
+        uct_gaudi_topo_ctx.num_hnic_devices  = 0;
     }
 
     ucs_free(accel_path);
@@ -538,7 +544,7 @@ out:
  * 2. Broadcom: bnxt_re driver creates IB sysfs for RoCE
  */
 static int
-ucs_gaudi_is_hnic_active(ucs_sys_device_t hnic_device, uint16_t hnic_vendor_id)
+uct_gaudi_is_hnic_active(ucs_sys_device_t hnic_device, uint16_t hnic_vendor_id)
 {
     ucs_status_t status;
     char *path;
@@ -556,7 +562,7 @@ ucs_gaudi_is_hnic_active(ucs_sys_device_t hnic_device, uint16_t hnic_vendor_id)
     dev_name = ucs_topo_sys_device_get_name(hnic_device);
 
     /* Mellanox/Broadcom devices: prefer InfiniBand state file (port 1) */
-    ucs_snprintf_safe(path, PATH_MAX, UCS_GAUDI_TOPO_INFINIBAND_PORT_FMT,
+    ucs_snprintf_safe(path, PATH_MAX, UCT_GAUDI_TOPO_INFINIBAND_PORT_FMT,
                       dev_name);
 
     /* ports/1/state first (typically "4: ACTIVE\n" when up) */
@@ -588,7 +594,7 @@ ucs_gaudi_is_hnic_active(ucs_sys_device_t hnic_device, uint16_t hnic_vendor_id)
     }
 
     /* Fallback: assume inactive */
-    if (hnic_vendor_id == UCS_GAUDI_TOPO_MELLANOX_VENDOR_ID) {
+    if (hnic_vendor_id == UCT_GAUDI_TOPO_MELLANOX_VENDOR_ID) {
         ucs_debug("Mellanox HNIC %s: IB state files absent, assuming inactive",
                   dev_name);
     } else {
@@ -604,7 +610,7 @@ ucs_gaudi_is_hnic_active(ucs_sys_device_t hnic_device, uint16_t hnic_vendor_id)
  * Return PCIe hop count between two sysfs paths and the common ancestor path; 
  * 255 if they live in separate root complexes. 
  */
-static inline unsigned ucs_gaudi_count_pcie_hops(const char *path1,
+static inline unsigned uct_gaudi_count_pcie_hops(const char *path1,
                                                  const char *path2,
                                                  char *common_path)
 {
@@ -625,7 +631,7 @@ static inline unsigned ucs_gaudi_count_pcie_hops(const char *path1,
  *   PCIe hop count via sysfs paths.
  */
 static ucs_status_t
-ucs_gaudi_estimate_distance(ucs_sys_device_t device1, ucs_sys_device_t device2,
+uct_gaudi_estimate_distance(ucs_sys_device_t device1, ucs_sys_device_t device2,
                             ucs_sys_dev_distance_t *distance)
 {
     ucs_numa_node_t numa1, numa2;
@@ -681,17 +687,17 @@ ucs_gaudi_estimate_distance(ucs_sys_device_t device1, ucs_sys_device_t device2,
     }
 
     /* convert devices to sysfs paths */
-    status = ucs_gaudi_sys_dev_to_sysfs_path(device1, path1, PATH_MAX);
+    status = uct_gaudi_sys_dev_to_sysfs_path(device1, path1, PATH_MAX);
     if (status != UCS_OK) {
         goto free_all;
     }
 
-    status = ucs_gaudi_sys_dev_to_sysfs_path(device2, path2, PATH_MAX);
+    status = uct_gaudi_sys_dev_to_sysfs_path(device2, path2, PATH_MAX);
     if (status != UCS_OK) {
         goto free_all;
     }
 
-    hops = ucs_gaudi_count_pcie_hops(path1, path2, common_path);
+    hops = uct_gaudi_count_pcie_hops(path1, path2, common_path);
 
     /* Note: DO NOT treat hops==255 as system distance. In this topology,
      * Gaudi/NIC can share NUMA but different root complexes. The 255 hop
@@ -721,42 +727,42 @@ out:
 }
 
 /* Create connection matrix */
-static ucs_status_t ucs_gaudi_create_connection_matrix()
+static ucs_status_t uct_gaudi_create_connection_matrix()
 {
     ucs_sys_device_t gaudi, hnic;
     ucs_numa_node_t numa1, numa2;
     ucs_status_t status;
-    ucs_gaudi_connection_t *conn;
+    uct_gaudi_connection_t *conn;
     const char *gaudi_name;
     unsigned conn_idx;
     unsigned i, j;
     unsigned max_num_connections;
     uint16_t hnic_vendor_id;
 
-    max_num_connections = ucs_gaudi_topo_ctx.num_gaudi_devices *
-                          ucs_gaudi_topo_ctx.num_hnic_devices;
-    ucs_gaudi_topo_ctx.connections = ucs_calloc(max_num_connections,
-                                                sizeof(ucs_gaudi_connection_t),
+    max_num_connections = uct_gaudi_topo_ctx.num_gaudi_devices *
+                          uct_gaudi_topo_ctx.num_hnic_devices;
+    uct_gaudi_topo_ctx.connections = ucs_calloc(max_num_connections,
+                                                sizeof(uct_gaudi_connection_t),
                                                 "gaudi_connections");
-    if (!ucs_gaudi_topo_ctx.connections) {
+    if (!uct_gaudi_topo_ctx.connections) {
         return UCS_ERR_NO_MEMORY;
     }
 
     conn_idx = 0;
-    for (i = 0; i < ucs_gaudi_topo_ctx.num_gaudi_devices; i++) {
-        gaudi      = ucs_gaudi_topo_ctx.gaudi_devices[i];
-        gaudi_name = ucs_gaudi_topo_ctx.gaudi_devices_names[i];
+    for (i = 0; i < uct_gaudi_topo_ctx.num_gaudi_devices; i++) {
+        gaudi      = uct_gaudi_topo_ctx.gaudi_devices[i];
+        gaudi_name = uct_gaudi_topo_ctx.gaudi_devices_names[i];
         numa1      = ucs_topo_sys_device_get_numa_node(gaudi);
 
-        for (j = 0; j < ucs_gaudi_topo_ctx.num_hnic_devices; j++) {
-            hnic           = ucs_gaudi_topo_ctx.hnic_devices[j];
-            hnic_vendor_id = ucs_gaudi_topo_ctx.hnic_vendor_ids[j];
-            if (!ucs_gaudi_is_hnic_active(hnic, hnic_vendor_id)) {
+        for (j = 0; j < uct_gaudi_topo_ctx.num_hnic_devices; j++) {
+            hnic           = uct_gaudi_topo_ctx.hnic_devices[j];
+            hnic_vendor_id = uct_gaudi_topo_ctx.hnic_vendor_ids[j];
+            if (!uct_gaudi_is_hnic_active(hnic, hnic_vendor_id)) {
                 continue;
             }
             numa2 = ucs_topo_sys_device_get_numa_node(hnic);
 
-            conn               = &ucs_gaudi_topo_ctx.connections[conn_idx];
+            conn               = &uct_gaudi_topo_ctx.connections[conn_idx];
             conn->gaudi_device = gaudi;
             ucs_strncpy_safe(conn->gaudi_dev_name, gaudi_name,
                              GAUDI_DEVICE_NAME_LEN);
@@ -767,7 +773,7 @@ static ucs_status_t ucs_gaudi_create_connection_matrix()
                                              numa1 :
                                              UCS_NUMA_NODE_UNDEFINED;
 
-            status = ucs_gaudi_estimate_distance(gaudi, hnic, &conn->distance);
+            status = uct_gaudi_estimate_distance(gaudi, hnic, &conn->distance);
             if (status != UCS_OK) {
                 ucs_debug("Failed to estimate distance between Gaudi %u and "
                           "HNIC %u",
@@ -778,21 +784,21 @@ static ucs_status_t ucs_gaudi_create_connection_matrix()
         }
     }
 
-    ucs_gaudi_topo_ctx.num_connections = conn_idx;
+    uct_gaudi_topo_ctx.num_connections = conn_idx;
     return UCS_OK;
 }
 
 /* Fetch precomputed distance for (gaudi, hnic) from the connections list */
-static int ucs_gaudi_lookup_distance(ucs_sys_device_t gaudi_device,
+static int uct_gaudi_lookup_distance(ucs_sys_device_t gaudi_device,
                                      ucs_sys_device_t hnic_device,
                                      ucs_sys_dev_distance_t *distance)
 {
-    const ucs_gaudi_connection_t *conn;
+    const uct_gaudi_connection_t *conn;
     unsigned i;
 
     /* Lookup connection matrix for distance metric */
-    for (i = 0; i < ucs_gaudi_topo_ctx.num_connections; i++) {
-        conn = &ucs_gaudi_topo_ctx.connections[i];
+    for (i = 0; i < uct_gaudi_topo_ctx.num_connections; i++) {
+        conn = &uct_gaudi_topo_ctx.connections[i];
         if (conn->gaudi_device == gaudi_device &&
             conn->hnic_device == hnic_device) {
             if (distance) {
@@ -805,10 +811,10 @@ static int ucs_gaudi_lookup_distance(ucs_sys_device_t gaudi_device,
 }
 
 /* Compare function for sorting connections by distance */
-static int ucs_gaudi_compare_connections(const void *a, const void *b)
+static int uct_gaudi_compare_connections(const void *a, const void *b)
 {
-    const ucs_gaudi_connection_t *conn_a = (const ucs_gaudi_connection_t *)a;
-    const ucs_gaudi_connection_t *conn_b = (const ucs_gaudi_connection_t *)b;
+    const uct_gaudi_connection_t *conn_a = (const uct_gaudi_connection_t *)a;
+    const uct_gaudi_connection_t *conn_b = (const uct_gaudi_connection_t *)b;
     int cmp;
     const char *hnic_a;
     const char *hnic_b;
@@ -858,7 +864,7 @@ static int ucs_gaudi_compare_connections(const void *a, const void *b)
     return COMPARE(conn_a->gaudi_device, conn_b->gaudi_device);
 }
 
-static void ucs_gaudi_sys_cpuset_for_numa_node(ucs_sys_cpuset_t *cpuset,
+static void uct_gaudi_sys_cpuset_for_numa_node(ucs_sys_cpuset_t *cpuset,
                                                ucs_numa_node_t node)
 {
     unsigned int cpu;
@@ -872,7 +878,7 @@ static void ucs_gaudi_sys_cpuset_for_numa_node(ucs_sys_cpuset_t *cpuset,
 }
 
 /* Check if common_path indicates a PCIe Host Bridge (e.g., root complex) */
-static int ucs_gaudi_is_host_bridge_path(const char *common_path)
+static int uct_gaudi_is_host_bridge_path(const char *common_path)
 {
     const char *last;
     char format_check[16];
@@ -909,9 +915,9 @@ static int ucs_gaudi_is_host_bridge_path(const char *common_path)
 }
 
 /* Print connection matrix in a format similar to nvidia-smi topo -m */
-static void ucs_gaudi_print_connection_matrix()
+static void uct_gaudi_print_connection_matrix()
 {
-    ucs_gaudi_connection_t *conn;
+    uct_gaudi_connection_t *conn;
     ucs_numa_node_t gaudi_numa, hnic_numa;
     ucs_sys_device_t gaudi, hnic;
     ucs_sys_cpuset_t cpuset;
@@ -944,7 +950,7 @@ static void ucs_gaudi_print_connection_matrix()
         goto free_path2;
     }
 
-    buffer_size = 256 + (ucs_gaudi_topo_ctx.num_hnic_devices * 20);
+    buffer_size = 256 + (uct_gaudi_topo_ctx.num_hnic_devices * 20);
     buffer      = ucs_malloc(buffer_size, "buffer");
     if (buffer == NULL) {
         status = UCS_ERR_NO_MEMORY;
@@ -955,10 +961,10 @@ static void ucs_gaudi_print_connection_matrix()
     ucs_snprintf_safe(buffer, buffer_size, "%-12s %-15s %-12s", "ModuleID",
                       "Gaudi", "NUMA ID");
 
-    for (i = 0; i < ucs_gaudi_topo_ctx.num_hnic_devices; i++) {
-        hnic           = ucs_gaudi_topo_ctx.hnic_devices[i];
-        hnic_vendor_id = ucs_gaudi_topo_ctx.hnic_vendor_ids[i];
-        if (!ucs_gaudi_is_hnic_active(hnic, hnic_vendor_id)) {
+    for (i = 0; i < uct_gaudi_topo_ctx.num_hnic_devices; i++) {
+        hnic           = uct_gaudi_topo_ctx.hnic_devices[i];
+        hnic_vendor_id = uct_gaudi_topo_ctx.hnic_vendor_ids[i];
+        if (!uct_gaudi_is_hnic_active(hnic, hnic_vendor_id)) {
             continue;
         }
         hnic_name = ucs_topo_sys_device_get_name(hnic);
@@ -971,13 +977,13 @@ static void ucs_gaudi_print_connection_matrix()
 
 
     /* Print rows for each Gaudi device */
-    for (i = 0; i < ucs_gaudi_topo_ctx.num_gaudi_devices; i++) {
-        gaudi      = ucs_gaudi_topo_ctx.gaudi_devices[i];
-        gaudi_name = ucs_gaudi_topo_ctx.gaudi_devices_names[i];
+    for (i = 0; i < uct_gaudi_topo_ctx.num_gaudi_devices; i++) {
+        gaudi      = uct_gaudi_topo_ctx.gaudi_devices[i];
+        gaudi_name = uct_gaudi_topo_ctx.gaudi_devices_names[i];
         gaudi_numa = ucs_topo_sys_device_get_numa_node(gaudi);
 
         /* Get module ID */
-        status = ucs_gaudi_read_module_id(gaudi_name, &module_id);
+        status = uct_gaudi_read_module_id(gaudi_name, &module_id);
         if (status != UCS_OK) {
             ucs_strncpy_safe(module_id_str, "N/A", sizeof(module_id_str));
         } else {
@@ -993,7 +999,7 @@ static void ucs_gaudi_print_connection_matrix()
         } else {
             ucs_snprintf_safe(numa_str, sizeof(numa_str), "%d", gaudi_numa);
 
-            ucs_gaudi_sys_cpuset_for_numa_node(&cpuset, gaudi_numa);
+            uct_gaudi_sys_cpuset_for_numa_node(&cpuset, gaudi_numa);
             ucs_make_affinity_str(&cpuset, cpu_affinity, sizeof(cpu_affinity));
         }
 
@@ -1002,18 +1008,18 @@ static void ucs_gaudi_print_connection_matrix()
                           module_id_str, gaudi_name, numa_str);
 
         /* Fill connection types for each HNIC */
-        for (j = 0; j < ucs_gaudi_topo_ctx.num_hnic_devices; j++) {
-            hnic           = ucs_gaudi_topo_ctx.hnic_devices[j];
-            hnic_vendor_id = ucs_gaudi_topo_ctx.hnic_vendor_ids[j];
-            if (!ucs_gaudi_is_hnic_active(hnic, hnic_vendor_id)) {
+        for (j = 0; j < uct_gaudi_topo_ctx.num_hnic_devices; j++) {
+            hnic           = uct_gaudi_topo_ctx.hnic_devices[j];
+            hnic_vendor_id = uct_gaudi_topo_ctx.hnic_vendor_ids[j];
+            if (!uct_gaudi_is_hnic_active(hnic, hnic_vendor_id)) {
                 continue;
             }
             hnic_numa = ucs_topo_sys_device_get_numa_node(hnic);
 
             /* Find connection */
             connection_type[0] = '\0';
-            for (k = 0; k < ucs_gaudi_topo_ctx.num_connections; k++) {
-                conn = &ucs_gaudi_topo_ctx.connections[k];
+            for (k = 0; k < uct_gaudi_topo_ctx.num_connections; k++) {
+                conn = &uct_gaudi_topo_ctx.connections[k];
                 if (conn->gaudi_device == gaudi && conn->hnic_device == hnic) {
                     /* 1. Different NUMA - SYS */
                     if (gaudi_numa != UCS_NUMA_NODE_UNDEFINED &&
@@ -1025,17 +1031,17 @@ static void ucs_gaudi_print_connection_matrix()
                     }
 
                     /* 2. Same NUMA - based on PCIe hops */
-                    status = ucs_gaudi_sys_dev_to_sysfs_path(gaudi, path1,
+                    status = uct_gaudi_sys_dev_to_sysfs_path(gaudi, path1,
                                                              PATH_MAX);
                     if (status != UCS_OK) {
                         continue;
                     }
-                    status = ucs_gaudi_sys_dev_to_sysfs_path(hnic, path2,
+                    status = uct_gaudi_sys_dev_to_sysfs_path(hnic, path2,
                                                              PATH_MAX);
                     if (status != UCS_OK) {
                         continue;
                     }
-                    hops = ucs_gaudi_count_pcie_hops(path1, path2, common_path);
+                    hops = uct_gaudi_count_pcie_hops(path1, path2, common_path);
 
                     if (hops <= 1) {
                         ucs_strncpy_safe(connection_type, "PIX",
@@ -1043,7 +1049,7 @@ static void ucs_gaudi_print_connection_matrix()
                     } else if (hops <= 3) {
                         ucs_strncpy_safe(connection_type, "PXB",
                                          sizeof(connection_type));
-                    } else if (ucs_gaudi_is_host_bridge_path(common_path)) {
+                    } else if (uct_gaudi_is_host_bridge_path(common_path)) {
                         ucs_strncpy_safe(connection_type, "PHB",
                                          sizeof(connection_type));
                     } else if (gaudi_numa != UCS_NUMA_NODE_UNDEFINED &&
@@ -1076,10 +1082,10 @@ static void ucs_gaudi_print_connection_matrix()
 
     /* Print NIC Legend with NUMA nodes */
     ucs_info("\nNIC Legend:");
-    for (i = 0; i < ucs_gaudi_topo_ctx.num_hnic_devices; i++) {
-        hnic           = ucs_gaudi_topo_ctx.hnic_devices[i];
-        hnic_vendor_id = ucs_gaudi_topo_ctx.hnic_vendor_ids[i];
-        if (!ucs_gaudi_is_hnic_active(hnic, hnic_vendor_id)) {
+    for (i = 0; i < uct_gaudi_topo_ctx.num_hnic_devices; i++) {
+        hnic           = uct_gaudi_topo_ctx.hnic_devices[i];
+        hnic_vendor_id = uct_gaudi_topo_ctx.hnic_vendor_ids[i];
+        if (!uct_gaudi_is_hnic_active(hnic, hnic_vendor_id)) {
             continue;
         }
 
@@ -1118,12 +1124,12 @@ out:
 }
 
 /* Return default UCX port for given NIC vendor ID */
-static int ucs_gaudi_get_default_port(uint16_t vendor_id)
+static int uct_gaudi_get_default_port(uint16_t vendor_id)
 {
     switch (vendor_id) {
-    case UCS_GAUDI_TOPO_MELLANOX_VENDOR_ID: /* 0x15b3 */
+    case UCT_GAUDI_TOPO_MELLANOX_VENDOR_ID: /* 0x15b3 */
         return 1; /* mlx5_X:1 */
-    case UCS_GAUDI_TOPO_BROADCOM_VENDOR_ID: /* 0x14e4 */
+    case UCT_GAUDI_TOPO_BROADCOM_VENDOR_ID: /* 0x14e4 */
         return 1; /* bnxt_X:1 */
     default:
         return 1; /* fallback */
@@ -1135,7 +1141,7 @@ static int ucs_gaudi_get_default_port(uint16_t vendor_id)
  * Returns node 0 if the node is undefined or out of range.
  */
 static inline unsigned
-ucs_gaudi_get_validated_numa_node(ucs_sys_device_t device,
+uct_gaudi_get_validated_numa_node(ucs_sys_device_t device,
                                   unsigned num_numa_nodes)
 {
     ucs_numa_node_t node;
@@ -1176,7 +1182,7 @@ ucs_gaudi_get_validated_numa_node(ucs_sys_device_t device,
  *
  * Note: NICs without distance data are silently skipped in both passes.
  */
-static ucs_status_t ucs_gaudi_build_assignment_balanced()
+static ucs_status_t uct_gaudi_build_assignment_balanced()
 {
     ucs_sys_dev_distance_t distance;
     ucs_sys_device_t gaudi_device;
@@ -1222,7 +1228,7 @@ static ucs_status_t ucs_gaudi_build_assignment_balanced()
     ssize_t best_hidx;
 
     /* 
-     * ucs_gaudi_estimate_distance() uses:
+     * uct_gaudi_estimate_distance() uses:
      *   hop_latency_ns = 10e-9 seconds (10 nanoseconds)
      *   hop_bw_penalty = 0.95 (5% per hop)
      * 
@@ -1234,18 +1240,18 @@ static ucs_status_t ucs_gaudi_build_assignment_balanced()
     const double BANDWIDTH_EPSILON = 1e8; /* 100 MB/s, 0.1% of 100GB/s */
 
     const unsigned num_numa_nodes    = ucs_numa_num_configured_nodes();
-    const unsigned num_gaudi_devices = ucs_gaudi_topo_ctx.num_gaudi_devices;
-    const unsigned num_hnic_devices  = ucs_gaudi_topo_ctx.num_hnic_devices;
+    const unsigned num_gaudi_devices = uct_gaudi_topo_ctx.num_gaudi_devices;
+    const unsigned num_hnic_devices  = uct_gaudi_topo_ctx.num_hnic_devices;
 
     status = UCS_OK;
 
     /* Reset assignments */
     for (i = 0; i < num_gaudi_devices; i++) {
-        ucs_gaudi_topo_ctx.assigned_hnic_for_gaudi[i] =
+        uct_gaudi_topo_ctx.assigned_hnic_for_gaudi[i] =
                 UCS_SYS_DEVICE_ID_UNKNOWN;
-        ucs_gaudi_topo_ctx.assigned_port_for_gaudi[i] = 1;
+        uct_gaudi_topo_ctx.assigned_port_for_gaudi[i] = 1;
     }
-    ucs_gaudi_topo_ctx.have_assignment = 0;
+    uct_gaudi_topo_ctx.have_assignment = 0;
 
     /* Short-circuit if no devices */
     if (num_gaudi_devices == 0 || num_hnic_devices == 0) {
@@ -1276,13 +1282,13 @@ static ucs_status_t ucs_gaudi_build_assignment_balanced()
 
     /* Count devices per NUMA node */
     for (i = 0; i < num_gaudi_devices; i++) {
-        numa_node = ucs_gaudi_get_validated_numa_node(
-                ucs_gaudi_topo_ctx.gaudi_devices[i], num_numa_nodes);
+        numa_node = uct_gaudi_get_validated_numa_node(
+                uct_gaudi_topo_ctx.gaudi_devices[i], num_numa_nodes);
         gaudi_per_numa[numa_node]++;
     }
     for (i = 0; i < num_hnic_devices; i++) {
-        numa_node = ucs_gaudi_get_validated_numa_node(
-                ucs_gaudi_topo_ctx.hnic_devices[i], num_numa_nodes);
+        numa_node = uct_gaudi_get_validated_numa_node(
+                uct_gaudi_topo_ctx.hnic_devices[i], num_numa_nodes);
         hnic_per_numa[numa_node]++;
     }
 
@@ -1322,13 +1328,13 @@ static ucs_status_t ucs_gaudi_build_assignment_balanced()
 
     /* Populate NUMA-indexed arrays */
     for (i = 0; i < num_gaudi_devices; i++) {
-        numa_node = ucs_gaudi_get_validated_numa_node(
-                ucs_gaudi_topo_ctx.gaudi_devices[i], num_numa_nodes);
+        numa_node = uct_gaudi_get_validated_numa_node(
+                uct_gaudi_topo_ctx.gaudi_devices[i], num_numa_nodes);
         gaudi_idx_by_numa[gaudi_cursor[numa_node]++] = i;
     }
     for (i = 0; i < num_hnic_devices; i++) {
-        numa_node = ucs_gaudi_get_validated_numa_node(
-                ucs_gaudi_topo_ctx.hnic_devices[i], num_numa_nodes);
+        numa_node = uct_gaudi_get_validated_numa_node(
+                uct_gaudi_topo_ctx.hnic_devices[i], num_numa_nodes);
         hnic_idx_by_numa[hnic_cursor[numa_node]++] = i;
     }
 
@@ -1370,7 +1376,7 @@ static ucs_status_t ucs_gaudi_build_assignment_balanced()
         /* Assign each Gaudi to best local NIC */
         for (gi = gaudi_start; gi < gaudi_end; gi++) {
             gidx         = gaudi_idx_by_numa[gi];
-            gaudi_device = ucs_gaudi_topo_ctx.gaudi_devices[gidx];
+            gaudi_device = uct_gaudi_topo_ctx.gaudi_devices[gidx];
 
             best_hidx      = -1;
             best_latency   = DBL_MAX;
@@ -1379,9 +1385,9 @@ static ucs_status_t ucs_gaudi_build_assignment_balanced()
 
             for (j = 0; j < num_local_hnics; j++) {
                 hidx        = hnic_idx_by_numa[hnic_start + j];
-                hnic_device = ucs_gaudi_topo_ctx.hnic_devices[hidx];
+                hnic_device = uct_gaudi_topo_ctx.hnic_devices[hidx];
 
-                if (!ucs_gaudi_lookup_distance(gaudi_device, hnic_device,
+                if (!uct_gaudi_lookup_distance(gaudi_device, hnic_device,
                                                &distance)) {
                     continue;
                 }
@@ -1413,24 +1419,24 @@ static ucs_status_t ucs_gaudi_build_assignment_balanced()
             }
 
             if (best_hidx >= 0) {
-                vendor = ucs_gaudi_topo_ctx.hnic_vendor_ids[best_hidx];
+                vendor = uct_gaudi_topo_ctx.hnic_vendor_ids[best_hidx];
                 hnic_usage[best_hidx]++;
-                ucs_gaudi_topo_ctx.assigned_hnic_for_gaudi[gidx] =
-                        ucs_gaudi_topo_ctx.hnic_devices[best_hidx];
-                ucs_gaudi_topo_ctx.assigned_port_for_gaudi[gidx] =
-                        ucs_gaudi_get_default_port(vendor);
+                uct_gaudi_topo_ctx.assigned_hnic_for_gaudi[gidx] =
+                        uct_gaudi_topo_ctx.hnic_devices[best_hidx];
+                uct_gaudi_topo_ctx.assigned_port_for_gaudi[gidx] =
+                        uct_gaudi_get_default_port(vendor);
             }
         }
     }
 
     /* Pass 2: Global assignment with soft-cap preference */
     for (i = 0; i < num_gaudi_devices; i++) {
-        if (ucs_gaudi_topo_ctx.assigned_hnic_for_gaudi[i] !=
+        if (uct_gaudi_topo_ctx.assigned_hnic_for_gaudi[i] !=
             UCS_SYS_DEVICE_ID_UNKNOWN) {
             continue;
         }
 
-        gaudi_device = ucs_gaudi_topo_ctx.gaudi_devices[i];
+        gaudi_device = uct_gaudi_topo_ctx.gaudi_devices[i];
 
         best_hidx      = -1;
         best_latency   = DBL_MAX;
@@ -1439,9 +1445,9 @@ static ucs_status_t ucs_gaudi_build_assignment_balanced()
         best_under_cap = 0;
 
         for (j = 0; j < num_hnic_devices; j++) {
-            hnic_device = ucs_gaudi_topo_ctx.hnic_devices[j];
+            hnic_device = uct_gaudi_topo_ctx.hnic_devices[j];
 
-            if (!ucs_gaudi_lookup_distance(gaudi_device, hnic_device,
+            if (!uct_gaudi_lookup_distance(gaudi_device, hnic_device,
                                            &distance)) {
                 continue;
             }
@@ -1473,26 +1479,26 @@ static ucs_status_t ucs_gaudi_build_assignment_balanced()
         }
 
         if (best_hidx >= 0) {
-            vendor = ucs_gaudi_topo_ctx.hnic_vendor_ids[best_hidx];
+            vendor = uct_gaudi_topo_ctx.hnic_vendor_ids[best_hidx];
             hnic_usage[best_hidx]++;
-            ucs_gaudi_topo_ctx.assigned_hnic_for_gaudi[i] =
-                    ucs_gaudi_topo_ctx.hnic_devices[best_hidx];
-            ucs_gaudi_topo_ctx.assigned_port_for_gaudi[i] =
-                    ucs_gaudi_get_default_port(vendor);
+            uct_gaudi_topo_ctx.assigned_hnic_for_gaudi[i] =
+                    uct_gaudi_topo_ctx.hnic_devices[best_hidx];
+            uct_gaudi_topo_ctx.assigned_port_for_gaudi[i] =
+                    uct_gaudi_get_default_port(vendor);
         }
     }
 
     /* Finalize and validate assignment */
     assigned_count = 0;
     for (i = 0; i < num_gaudi_devices; i++) {
-        if (ucs_gaudi_topo_ctx.assigned_hnic_for_gaudi[i] !=
+        if (uct_gaudi_topo_ctx.assigned_hnic_for_gaudi[i] !=
             UCS_SYS_DEVICE_ID_UNKNOWN) {
             assigned_count++;
         }
     }
 
-    ucs_gaudi_topo_ctx.have_assignment = (assigned_count == num_gaudi_devices);
-    if (!ucs_gaudi_topo_ctx.have_assignment) {
+    uct_gaudi_topo_ctx.have_assignment = (assigned_count == num_gaudi_devices);
+    if (!uct_gaudi_topo_ctx.have_assignment) {
         ucs_warn("Gaudi->NIC assignment incomplete: %u of %u devices assigned",
                  assigned_count, num_gaudi_devices);
     }
@@ -1513,7 +1519,7 @@ out:
 }
 
 /* Find best HNIC for a given Gaudi device */
-ucs_status_t ucs_gaudi_find_best_connection(const char *accel_name,
+ucs_status_t uct_gaudi_find_best_connection(const char *accel_name,
                                             ucs_sys_device_t *hnic_device,
                                             int *port_num)
 {
@@ -1523,12 +1529,12 @@ ucs_status_t ucs_gaudi_find_best_connection(const char *accel_name,
     /* Validate parameters */
     if ((accel_name == NULL) || (hnic_device == NULL) || (port_num == NULL)) {
         ucs_error("Invalid NULL parameter(s) to "
-                  "ucs_gaudi_find_best_connection()");
+                  "uct_gaudi_find_best_connection()");
         return UCS_ERR_INVALID_PARAM;
     }
 
     /* Perform lazy initialization */
-    status = ucs_gaudi_lazy_init();
+    status = uct_gaudi_lazy_init();
     if (status != UCS_OK) {
         if (status == UCS_ERR_UNSUPPORTED) {
             /* Provider disabled: treat like "nothing suitable" */
@@ -1539,39 +1545,39 @@ ucs_status_t ucs_gaudi_find_best_connection(const char *accel_name,
         return status;
     }
 
-    ucs_spin_lock(&ucs_gaudi_topo_ctx.lock);
+    ucs_spin_lock(&uct_gaudi_topo_ctx.lock);
 
     /* Return cached balanced assignment instead of searching connections */
-    for (i = 0; i < ucs_gaudi_topo_ctx.num_gaudi_devices; i++) {
-        if (!strcmp(accel_name, ucs_gaudi_topo_ctx.gaudi_devices_names[i])) {
+    for (i = 0; i < uct_gaudi_topo_ctx.num_gaudi_devices; i++) {
+        if (!strcmp(accel_name, uct_gaudi_topo_ctx.gaudi_devices_names[i])) {
             break;
         }
     }
 
-    if (i < ucs_gaudi_topo_ctx.num_gaudi_devices &&
-        ucs_gaudi_topo_ctx.have_assignment &&
-        ucs_gaudi_topo_ctx.assigned_hnic_for_gaudi[i] !=
+    if (i < uct_gaudi_topo_ctx.num_gaudi_devices &&
+        uct_gaudi_topo_ctx.have_assignment &&
+        uct_gaudi_topo_ctx.assigned_hnic_for_gaudi[i] !=
                 UCS_SYS_DEVICE_ID_UNKNOWN) {
-        *hnic_device = ucs_gaudi_topo_ctx.assigned_hnic_for_gaudi[i];
-        *port_num    = ucs_gaudi_topo_ctx.assigned_port_for_gaudi[i];
-        ucs_spin_unlock(&ucs_gaudi_topo_ctx.lock);
+        *hnic_device = uct_gaudi_topo_ctx.assigned_hnic_for_gaudi[i];
+        *port_num    = uct_gaudi_topo_ctx.assigned_port_for_gaudi[i];
+        ucs_spin_unlock(&uct_gaudi_topo_ctx.lock);
         ucs_info("Selected HNIC %s:%d for Gaudi %s",
                  ucs_topo_sys_device_get_name(*hnic_device), *port_num,
                  accel_name);
         return UCS_OK;
     }
 
-    ucs_spin_unlock(&ucs_gaudi_topo_ctx.lock);
+    ucs_spin_unlock(&uct_gaudi_topo_ctx.lock);
     ucs_error("No suitable HNIC found for Gaudi %s", accel_name);
     return UCS_ERR_NO_ELEM;
 }
 
 /* Get device-to-device distance for UCX topology queries */
-static ucs_status_t ucs_gaudi_get_distance(ucs_sys_device_t device1,
+static ucs_status_t uct_gaudi_get_distance(ucs_sys_device_t device1,
                                            ucs_sys_device_t device2,
                                            ucs_sys_dev_distance_t *distance)
 {
-    ucs_gaudi_connection_t *conn;
+    uct_gaudi_connection_t *conn;
     ucs_status_t status;
     unsigned i;
     uint16_t vendor_id1, vendor_id2;
@@ -1586,7 +1592,7 @@ static ucs_status_t ucs_gaudi_get_distance(ucs_sys_device_t device1,
     *distance = ucs_topo_default_distance;
 
     /* Perform lazy initialization */
-    status = ucs_gaudi_lazy_init();
+    status = uct_gaudi_lazy_init();
     if (status != UCS_OK) {
         if (status == UCS_ERR_UNSUPPORTED) {
             /* Provider disabled: fall back to generic estimation */
@@ -1604,42 +1610,42 @@ static ucs_status_t ucs_gaudi_get_distance(ucs_sys_device_t device1,
     }
 
     /* Check if either device is a Gaudi device or HNIC */
-    if (ucs_gaudi_read_vendor_id(device1, &vendor_id1) != UCS_OK) {
+    if (uct_gaudi_read_vendor_id(device1, &vendor_id1) != UCS_OK) {
         goto fallback;
     }
-    if (ucs_gaudi_read_vendor_id(device2, &vendor_id2) != UCS_OK) {
+    if (uct_gaudi_read_vendor_id(device2, &vendor_id2) != UCS_OK) {
         goto fallback;
     }
 
     /* If one device is Gaudi or HNIC, check connection matrix */
-    if ((vendor_id1 == UCS_GAUDI_TOPO_VENDOR_ID ||
-         vendor_id1 == UCS_GAUDI_TOPO_MELLANOX_VENDOR_ID ||
-         vendor_id1 == UCS_GAUDI_TOPO_BROADCOM_VENDOR_ID) ||
-        (vendor_id2 == UCS_GAUDI_TOPO_VENDOR_ID ||
-         vendor_id2 == UCS_GAUDI_TOPO_MELLANOX_VENDOR_ID ||
-         vendor_id2 == UCS_GAUDI_TOPO_BROADCOM_VENDOR_ID)) {
-        ucs_spin_lock(&ucs_gaudi_topo_ctx.lock);
-        for (i = 0; i < ucs_gaudi_topo_ctx.num_connections; i++) {
-            conn = &ucs_gaudi_topo_ctx.connections[i];
+    if ((vendor_id1 == UCT_GAUDI_TOPO_VENDOR_ID ||
+         vendor_id1 == UCT_GAUDI_TOPO_MELLANOX_VENDOR_ID ||
+         vendor_id1 == UCT_GAUDI_TOPO_BROADCOM_VENDOR_ID) ||
+        (vendor_id2 == UCT_GAUDI_TOPO_VENDOR_ID ||
+         vendor_id2 == UCT_GAUDI_TOPO_MELLANOX_VENDOR_ID ||
+         vendor_id2 == UCT_GAUDI_TOPO_BROADCOM_VENDOR_ID)) {
+        ucs_spin_lock(&uct_gaudi_topo_ctx.lock);
+        for (i = 0; i < uct_gaudi_topo_ctx.num_connections; i++) {
+            conn = &uct_gaudi_topo_ctx.connections[i];
             if ((conn->gaudi_device == device1 &&
                  conn->hnic_device == device2) ||
                 (conn->gaudi_device == device2 &&
                  conn->hnic_device == device1)) {
                 *distance = conn->distance;
-                ucs_spin_unlock(&ucs_gaudi_topo_ctx.lock);
+                ucs_spin_unlock(&uct_gaudi_topo_ctx.lock);
                 return UCS_OK;
             }
         }
-        ucs_spin_unlock(&ucs_gaudi_topo_ctx.lock);
+        ucs_spin_unlock(&uct_gaudi_topo_ctx.lock);
     }
 
 fallback:
     /* Fallback to estimate_distance for other device pairs */
-    return ucs_gaudi_estimate_distance(device1, device2, distance);
+    return uct_gaudi_estimate_distance(device1, device2, distance);
 }
 
 /* Get device-to-memory distance for UCX topology queries */
-static void ucs_gaudi_get_memory_distance(ucs_sys_device_t device,
+static void uct_gaudi_get_memory_distance(ucs_sys_device_t device,
                                           ucs_sys_dev_distance_t *distance)
 {
     ucs_status_t status;
@@ -1664,10 +1670,10 @@ static void ucs_gaudi_get_memory_distance(ucs_sys_device_t device,
     }
 
     /* Check if device is Gaudi or HNIC */
-    status = ucs_gaudi_read_vendor_id(device, &vendor_id);
-    if (status != UCS_OK || (vendor_id != UCS_GAUDI_TOPO_VENDOR_ID &&
-                             vendor_id != UCS_GAUDI_TOPO_MELLANOX_VENDOR_ID &&
-                             vendor_id != UCS_GAUDI_TOPO_BROADCOM_VENDOR_ID)) {
+    status = uct_gaudi_read_vendor_id(device, &vendor_id);
+    if (status != UCS_OK || (vendor_id != UCT_GAUDI_TOPO_VENDOR_ID &&
+                             vendor_id != UCT_GAUDI_TOPO_MELLANOX_VENDOR_ID &&
+                             vendor_id != UCT_GAUDI_TOPO_BROADCOM_VENDOR_ID)) {
         return;
     }
 
@@ -1716,30 +1722,30 @@ static void ucs_gaudi_get_memory_distance(ucs_sys_device_t device,
 }
 
 /* Initialize spinlock exactly once */
-static void ucs_gaudi_spinlock_once_init()
+static void uct_gaudi_spinlock_once_init()
 {
-    gaudi_spinlock_init_status = ucs_spinlock_init(&ucs_gaudi_topo_ctx.lock, 0);
+    gaudi_spinlock_init_status = ucs_spinlock_init(&uct_gaudi_topo_ctx.lock, 0);
 }
 
 /* Initialization function */
-void ucs_gaudi_topo_init()
+void uct_gaudi_topo_init()
 {
     const char *disable;
 
-    disable = getenv("UCS_GAUDI_TOPO_DISABLE");
+    disable = getenv("UCT_GAUDI_TOPO_DISABLE");
     if (disable && strcmp(disable, "0") != 0) {
-        ucs_debug("Gaudi topology provider disabled by UCS_GAUDI_TOPO_DISABLE");
+        ucs_debug("Gaudi topology provider disabled by UCT_GAUDI_TOPO_DISABLE");
         return;
     }
 
     /* Prevent double registration */
-    if (ucs_gaudi_topo_ctx.provider_added) {
+    if (uct_gaudi_topo_ctx.provider_added) {
         ucs_debug("Gaudi topology provider already registered");
         return;
     }
 
     /* Ensure spinlock exists even if lazy init is first */
-    pthread_once(&gaudi_spinlock_once_flag, ucs_gaudi_spinlock_once_init);
+    pthread_once(&gaudi_spinlock_once_flag, uct_gaudi_spinlock_once_init);
     if (gaudi_spinlock_init_status != UCS_OK) {
         ucs_error("Failed to initialize spinlock: %s",
                   ucs_status_string(gaudi_spinlock_init_status));
@@ -1747,11 +1753,11 @@ void ucs_gaudi_topo_init()
     }
 
     pthread_mutex_lock(&gaudi_init_mutex);
-    if (!ucs_gaudi_topo_ctx.provider_added) {
+    if (!uct_gaudi_topo_ctx.provider_added) {
         ucs_debug("Registering Gaudi topology provider");
         ucs_list_add_head(&ucs_sys_topo_providers_list,
-                          &ucs_gaudi_topo_provider.list);
-        ucs_gaudi_topo_ctx.provider_added = 1;
+                          &uct_gaudi_topo_provider.list);
+        uct_gaudi_topo_ctx.provider_added = 1;
         ucs_debug("Gaudi topology provider registered");
     } else {
         ucs_debug("Gaudi topology provider already registered (raced)");
@@ -1759,153 +1765,155 @@ void ucs_gaudi_topo_init()
     pthread_mutex_unlock(&gaudi_init_mutex);
 }
 
-static ucs_status_t ucs_gaudi_lazy_init()
+static ucs_status_t uct_gaudi_lazy_init()
 {
     ucs_status_t status;
     const char *disable;
 
-    disable = getenv("UCS_GAUDI_TOPO_DISABLE");
+    disable = getenv("UCT_GAUDI_TOPO_DISABLE");
     if (disable && strcmp(disable, "0") != 0) {
-        ucs_debug("Gaudi topology provider disabled by UCS_GAUDI_TOPO_DISABLE");
+        ucs_debug("Gaudi topology provider disabled by UCT_GAUDI_TOPO_DISABLE");
         return UCS_ERR_UNSUPPORTED;
     }
 
     /* Ensure spinlock exists */
-    pthread_once(&gaudi_spinlock_once_flag, ucs_gaudi_spinlock_once_init);
+    pthread_once(&gaudi_spinlock_once_flag, uct_gaudi_spinlock_once_init);
     if (gaudi_spinlock_init_status != UCS_OK) {
         ucs_error("Failed to initialize spinlock: %s",
                   ucs_status_string(gaudi_spinlock_init_status));
         return gaudi_spinlock_init_status;
     }
 
-    ucs_spin_lock(&ucs_gaudi_topo_ctx.lock);
+    ucs_spin_lock(&uct_gaudi_topo_ctx.lock);
 
-    if (ucs_gaudi_topo_ctx.initialized) {
-        ucs_spin_unlock(&ucs_gaudi_topo_ctx.lock);
+    if (uct_gaudi_topo_ctx.initialized) {
+        ucs_spin_unlock(&uct_gaudi_topo_ctx.lock);
         return UCS_OK;
     }
 
     ucs_debug("Performing lazy initialization of Gaudi topology");
 
-    status = ucs_gaudi_enumerate_devices();
+    status = uct_gaudi_enumerate_devices();
     if (status != UCS_OK) {
         ucs_error("Failed to enumerate Gaudi devices: %s",
                   ucs_status_string(status));
-        ucs_spin_unlock(&ucs_gaudi_topo_ctx.lock);
+        ucs_spin_unlock(&uct_gaudi_topo_ctx.lock);
         return status;
     }
 
-    status = ucs_gaudi_create_connection_matrix();
+    status = uct_gaudi_create_connection_matrix();
     if (status != UCS_OK) {
         ucs_error("Failed to create connection matrix: %s",
                   ucs_status_string(status));
         goto out;
     }
 
-    qsort(ucs_gaudi_topo_ctx.connections, ucs_gaudi_topo_ctx.num_connections,
-          sizeof(ucs_gaudi_connection_t), ucs_gaudi_compare_connections);
+    qsort(uct_gaudi_topo_ctx.connections, uct_gaudi_topo_ctx.num_connections,
+          sizeof(uct_gaudi_connection_t), uct_gaudi_compare_connections);
 
-    ucs_free(ucs_gaudi_topo_ctx.assigned_hnic_for_gaudi);
-    ucs_free(ucs_gaudi_topo_ctx.assigned_port_for_gaudi);
-    ucs_gaudi_topo_ctx.assigned_hnic_for_gaudi =
-            ucs_calloc(ucs_gaudi_topo_ctx.num_gaudi_devices,
-                       sizeof(*ucs_gaudi_topo_ctx.assigned_hnic_for_gaudi),
+    ucs_free(uct_gaudi_topo_ctx.assigned_hnic_for_gaudi);
+    ucs_free(uct_gaudi_topo_ctx.assigned_port_for_gaudi);
+    uct_gaudi_topo_ctx.assigned_hnic_for_gaudi =
+            ucs_calloc(uct_gaudi_topo_ctx.num_gaudi_devices,
+                       sizeof(*uct_gaudi_topo_ctx.assigned_hnic_for_gaudi),
                        "assigned_hnic_for_gaudi");
-    ucs_gaudi_topo_ctx.assigned_port_for_gaudi =
-            ucs_calloc(ucs_gaudi_topo_ctx.num_gaudi_devices,
-                       sizeof(*ucs_gaudi_topo_ctx.assigned_port_for_gaudi),
+    uct_gaudi_topo_ctx.assigned_port_for_gaudi =
+            ucs_calloc(uct_gaudi_topo_ctx.num_gaudi_devices,
+                       sizeof(*uct_gaudi_topo_ctx.assigned_port_for_gaudi),
                        "assigned_port_for_gaudi");
-    if (!ucs_gaudi_topo_ctx.assigned_hnic_for_gaudi ||
-        !ucs_gaudi_topo_ctx.assigned_port_for_gaudi) {
+    if (!uct_gaudi_topo_ctx.assigned_hnic_for_gaudi ||
+        !uct_gaudi_topo_ctx.assigned_port_for_gaudi) {
         status = UCS_ERR_NO_MEMORY;
         goto out;
     }
 
     /* Build a single, balanced assignment */
-    status = ucs_gaudi_build_assignment_balanced();
+    status = uct_gaudi_build_assignment_balanced();
     if (status != UCS_OK) {
         goto out;
     }
 
     if (ucs_global_opts.log_component.log_level >= UCS_LOG_LEVEL_DEBUG) {
-        ucs_gaudi_print_connection_matrix();
+        uct_gaudi_print_connection_matrix();
     }
 
-    ucs_gaudi_topo_ctx.initialized = 1;
+    uct_gaudi_topo_ctx.initialized = 1;
     ucs_debug("Gaudi topology initialized");
-    ucs_spin_unlock(&ucs_gaudi_topo_ctx.lock);
+    ucs_spin_unlock(&uct_gaudi_topo_ctx.lock);
     return UCS_OK;
 
 out:
     /* Free allocations that happened before error */
-    ucs_free(ucs_gaudi_topo_ctx.gaudi_devices);
-    ucs_free(ucs_gaudi_topo_ctx.gaudi_devices_names);
-    ucs_free(ucs_gaudi_topo_ctx.hnic_devices);
-    ucs_free(ucs_gaudi_topo_ctx.hnic_vendor_ids);
-    ucs_free(ucs_gaudi_topo_ctx.connections);
-    ucs_free(ucs_gaudi_topo_ctx.assigned_hnic_for_gaudi);
-    ucs_free(ucs_gaudi_topo_ctx.assigned_port_for_gaudi);
+    ucs_free(uct_gaudi_topo_ctx.gaudi_devices);
+    ucs_free(uct_gaudi_topo_ctx.gaudi_devices_names);
+    ucs_free(uct_gaudi_topo_ctx.hnic_devices);
+    ucs_free(uct_gaudi_topo_ctx.hnic_vendor_ids);
+    ucs_free(uct_gaudi_topo_ctx.connections);
+    ucs_free(uct_gaudi_topo_ctx.assigned_hnic_for_gaudi);
+    ucs_free(uct_gaudi_topo_ctx.assigned_port_for_gaudi);
 
-    ucs_gaudi_topo_ctx.gaudi_devices           = NULL;
-    ucs_gaudi_topo_ctx.gaudi_devices_names     = NULL;
-    ucs_gaudi_topo_ctx.hnic_devices            = NULL;
-    ucs_gaudi_topo_ctx.hnic_vendor_ids         = NULL;
-    ucs_gaudi_topo_ctx.connections             = NULL;
-    ucs_gaudi_topo_ctx.assigned_hnic_for_gaudi = NULL;
-    ucs_gaudi_topo_ctx.assigned_port_for_gaudi = NULL;
+    uct_gaudi_topo_ctx.gaudi_devices           = NULL;
+    uct_gaudi_topo_ctx.gaudi_devices_names     = NULL;
+    uct_gaudi_topo_ctx.hnic_devices            = NULL;
+    uct_gaudi_topo_ctx.hnic_vendor_ids         = NULL;
+    uct_gaudi_topo_ctx.connections             = NULL;
+    uct_gaudi_topo_ctx.assigned_hnic_for_gaudi = NULL;
+    uct_gaudi_topo_ctx.assigned_port_for_gaudi = NULL;
 
-    ucs_gaudi_topo_ctx.num_gaudi_devices = 0;
-    ucs_gaudi_topo_ctx.num_hnic_devices  = 0;
-    ucs_gaudi_topo_ctx.num_connections   = 0;
-    ucs_gaudi_topo_ctx.have_assignment   = 0;
+    uct_gaudi_topo_ctx.num_gaudi_devices = 0;
+    uct_gaudi_topo_ctx.num_hnic_devices  = 0;
+    uct_gaudi_topo_ctx.num_connections   = 0;
+    uct_gaudi_topo_ctx.have_assignment   = 0;
 
-    ucs_spin_unlock(&ucs_gaudi_topo_ctx.lock);
+    ucs_spin_unlock(&uct_gaudi_topo_ctx.lock);
     return status;
 }
 
 /* Cleanup function */
-void ucs_gaudi_topo_cleanup()
+void uct_gaudi_topo_cleanup()
 {
     pthread_mutex_lock(&gaudi_init_mutex);
 
     /* If provider was never added, nothing to clean up */
-    if (!ucs_gaudi_topo_ctx.provider_added) {
+    if (!uct_gaudi_topo_ctx.provider_added) {
         pthread_mutex_unlock(&gaudi_init_mutex);
         return;
     }
 
     /* Provider was added, so spinlock is guaranteed initialized */
-    ucs_spin_lock(&ucs_gaudi_topo_ctx.lock);
+    ucs_spin_lock(&uct_gaudi_topo_ctx.lock);
 
     /* Remove the Gaudi topology provider from the list */
-    ucs_list_del(&ucs_gaudi_topo_provider.list);
+    ucs_list_del(&uct_gaudi_topo_provider.list);
 
-    ucs_free(ucs_gaudi_topo_ctx.gaudi_devices);
-    ucs_free(ucs_gaudi_topo_ctx.gaudi_devices_names);
-    ucs_free(ucs_gaudi_topo_ctx.hnic_devices);
-    ucs_free(ucs_gaudi_topo_ctx.hnic_vendor_ids);
-    ucs_free(ucs_gaudi_topo_ctx.connections);
-    ucs_free(ucs_gaudi_topo_ctx.assigned_hnic_for_gaudi);
-    ucs_free(ucs_gaudi_topo_ctx.assigned_port_for_gaudi);
+    ucs_free(uct_gaudi_topo_ctx.gaudi_devices);
+    ucs_free(uct_gaudi_topo_ctx.gaudi_devices_names);
+    ucs_free(uct_gaudi_topo_ctx.hnic_devices);
+    ucs_free(uct_gaudi_topo_ctx.hnic_vendor_ids);
+    ucs_free(uct_gaudi_topo_ctx.connections);
+    ucs_free(uct_gaudi_topo_ctx.assigned_hnic_for_gaudi);
+    ucs_free(uct_gaudi_topo_ctx.assigned_port_for_gaudi);
 
     /* Reset pointers */
-    ucs_gaudi_topo_ctx.gaudi_devices           = NULL;
-    ucs_gaudi_topo_ctx.gaudi_devices_names     = NULL;
-    ucs_gaudi_topo_ctx.hnic_devices            = NULL;
-    ucs_gaudi_topo_ctx.hnic_vendor_ids         = NULL;
-    ucs_gaudi_topo_ctx.connections             = NULL;
-    ucs_gaudi_topo_ctx.assigned_hnic_for_gaudi = NULL;
-    ucs_gaudi_topo_ctx.assigned_port_for_gaudi = NULL;
+    uct_gaudi_topo_ctx.gaudi_devices           = NULL;
+    uct_gaudi_topo_ctx.gaudi_devices_names     = NULL;
+    uct_gaudi_topo_ctx.hnic_devices            = NULL;
+    uct_gaudi_topo_ctx.hnic_vendor_ids         = NULL;
+    uct_gaudi_topo_ctx.connections             = NULL;
+    uct_gaudi_topo_ctx.assigned_hnic_for_gaudi = NULL;
+    uct_gaudi_topo_ctx.assigned_port_for_gaudi = NULL;
 
     /* Reset counters/flags */
-    ucs_gaudi_topo_ctx.num_gaudi_devices = 0;
-    ucs_gaudi_topo_ctx.num_hnic_devices  = 0;
-    ucs_gaudi_topo_ctx.num_connections   = 0;
-    ucs_gaudi_topo_ctx.initialized       = 0;
-    ucs_gaudi_topo_ctx.provider_added    = 0;
-    ucs_gaudi_topo_ctx.have_assignment   = 0;
+    uct_gaudi_topo_ctx.num_gaudi_devices = 0;
+    uct_gaudi_topo_ctx.num_hnic_devices  = 0;
+    uct_gaudi_topo_ctx.num_connections   = 0;
+    uct_gaudi_topo_ctx.initialized       = 0;
+    uct_gaudi_topo_ctx.provider_added    = 0;
+    uct_gaudi_topo_ctx.have_assignment   = 0;
 
-    ucs_spin_unlock(&ucs_gaudi_topo_ctx.lock);
+    ucs_spin_unlock(&uct_gaudi_topo_ctx.lock);
     pthread_mutex_unlock(&gaudi_init_mutex);
     ucs_debug("Gaudi topology cleaned up");
 }
+
+#endif /* HAVE_GAUDI_TOPO_API */

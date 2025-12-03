@@ -42,4 +42,7 @@ include $(top_srcdir)/config/module.am
 # TODO: enable pkg-config processing when module static build is enabled
 # include $(top_srcdir)/config/module-pkg-config.am
 
+pkgconfigdir = $(libdir)/pkgconfig
+pkgconfig_DATA = ucx-gaudi.pc
+
 endif

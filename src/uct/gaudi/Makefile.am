@@ -5,10 +5,7 @@
 
 if HAVE_GAUDI
 
-SUBDIRS = .
-if ENABLE_GAUDI_TOPO_API
-SUBDIRS += api
-endif
+SUBDIRS = . api
 
 module_LTLIBRARIES       = libuct_gaudi.la
 libuct_gaudi_la_CPPFLAGS = $(BASE_CPPFLAGS) $(GAUDI_CPPFLAGS) \

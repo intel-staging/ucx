@@ -16,10 +16,11 @@ AC_ARG_ENABLE([gaudi-topo-api],
 AM_CONDITIONAL([ENABLE_GAUDI_TOPO_API], 
                [test "x$gaudi_happy" = "xyes" && test "x$enable_gaudi_topo_api" = "xyes"])
 
-AS_IF([test "x$gaudi_happy" = "xyes" && test "x$enable_gaudi_topo_api" = "xyes"], [
-    AC_DEFINE([HAVE_GAUDI_TOPO_API], [1], [Gaudi topology API enabled])
-    AC_CONFIG_FILES([src/uct/gaudi/api/Makefile])
-])
 
 AC_CONFIG_FILES([src/uct/gaudi/Makefile
-                 src/uct/gaudi/ucx-gaudi.pc])
+                 src/uct/gaudi/ucx-gaudi.pc
+                 src/uct/gaudi/api/Makefile])
+
+AS_IF([test "x$gaudi_happy" = "xyes" && test "x$enable_gaudi_topo_api" = "xyes"], [
+    AC_DEFINE([HAVE_GAUDI_TOPO_API], [1], [Gaudi topology API enabled])
+])

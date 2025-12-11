@@ -174,7 +174,7 @@ uct_gaudi_md_open(uct_component_h component, const char *md_name,
                                      &md->dmabuf_fd);
 
     if (status != UCS_OK) {
-        ucs_error("failed to get dmabuf information\n");
+        ucs_error("failed to get dmabuf information");
         goto err_close_fd;
     }
 
@@ -205,6 +205,16 @@ ucs_status_t uct_gaudi_query_md_resources(uct_component_h component,
                                           uct_md_resource_desc_t **resources_p,
                                           unsigned *num_resources_p)
 {
+    ucs_status_t status;
+
+    /* Initialize Gaudi device discovery and topology registration */
+    status = uct_gaudi_base_discover_devices();
+    if (status != UCS_OK) {
+        ucs_debug("Gaudi device discovery failed, no devices available");
+        return uct_md_query_empty_md_resource(resources_p, num_resources_p);
+    }
+
+    /* Return single MD resource like CUDA/ROCm - follows accelerator provider pattern */
     return uct_md_query_single_md_resource(component, resources_p,
                                            num_resources_p);
 }

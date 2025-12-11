@@ -12,13 +12,17 @@
 #include <ucs/sys/module.h>
 #include <ucs/memory/numa.h>
 #include <ucs/sys/sys.h>
+#include <ucs/sys/string.h>
 #include <ucs/sys/topo/base/topo.h>
+#include <ucs/arch/atomic.h>
 #include <pthread.h>
 
 #include <inttypes.h>
 #include <fcntl.h>
 #include <hlthunk.h>
 #include <synapse_api.h>
+
+#define UCT_GAUDI_MAX_DEVICES 8
 
 int uct_gaudi_base_get_fd(int device_id, bool *fd_created)
 {
@@ -39,6 +43,9 @@ int uct_gaudi_base_get_fd(int device_id, bool *fd_created)
         return fd;
     }
 
+    if (fd_created != NULL) {
+        *fd_created = false;
+    }
     return deviceInfo.fd;
 }
 
@@ -151,4 +158,141 @@ uct_gaudi_base_query_devices(uct_md_h md,
     return uct_single_device_resource(md, md->component->name,
                                       UCT_DEVICE_TYPE_ACC, sys_dev,
                                       tl_devices_p, num_tl_devices_p);
+}
+
+void uct_gaudi_base_get_sys_dev_by_module(int module_id,
+                                          ucs_sys_device_t *sys_dev_p)
+{
+    char sysfs_path[256];
+    char bus_id_buffer[64];
+    FILE *fp;
+    ucs_status_t status;
+    int accel_id;
+    int found_module_id;
+
+    /* Use sysfs to find the module */
+    for (accel_id = 0; accel_id < UCT_GAUDI_MAX_DEVICES; accel_id++) {
+        /* Check if this accel device corresponds to our target module_id */
+        snprintf(sysfs_path, sizeof(sysfs_path),
+                 "/sys/class/accel/accel%d/device/module_id", accel_id);
+
+        fp = fopen(sysfs_path, "r");
+        if (fp == NULL) {
+            continue; /* This accel device doesn't exist or no permissions */
+        }
+
+        if (fscanf(fp, "%d", &found_module_id) != 1 ||
+            found_module_id != module_id) {
+            fclose(fp);
+            continue;
+        }
+        fclose(fp);
+
+        /* Found our target module! Get its PCI bus ID directly */
+        snprintf(sysfs_path, sizeof(sysfs_path),
+                 "/sys/class/accel/accel%d/device/pci_addr", accel_id);
+
+        fp = fopen(sysfs_path, "r");
+        if (fp == NULL) {
+            /* Found module but couldn't open pci_addr */
+            break;
+        }
+
+        if (fscanf(fp, "%63s", bus_id_buffer) != 1) {
+            fclose(fp);
+            break;
+        }
+        fclose(fp);
+
+        /* Use ucs_topo_find_device_by_bdf_name which handles BDF parsing */
+        status = ucs_topo_find_device_by_bdf_name(bus_id_buffer, sys_dev_p);
+        if (status != UCS_OK) {
+            ucs_debug("failed to find system device for module %d (PCI: %s): %s",
+                      module_id, bus_id_buffer, ucs_status_string(status));
+            *sys_dev_p = UCS_SYS_DEVICE_ID_UNKNOWN;
+            return;
+        }
+
+        ucs_debug("successfully mapped Gaudi module %d (accel%d) to "
+                  "system device (PCI: %s)",
+                  module_id, accel_id, bus_id_buffer);
+        return;
+    }
+
+    /* Module not found */
+    *sys_dev_p = UCS_SYS_DEVICE_ID_UNKNOWN;
+}
+
+/* Device discovery - enumerate all Gaudi devices and register with topology */
+ucs_status_t uct_gaudi_base_discover_devices(void)
+{
+    static pthread_mutex_t discovery_mutex  = PTHREAD_MUTEX_INITIALIZER;
+    static volatile uint32_t devices_discovered = 0;
+    ucs_status_t status                     = UCS_OK;
+    ucs_sys_device_t sys_dev;
+    char device_name[16];
+    int registered_devices = 0;
+    int i;
+
+    /* Check if already discovered - use atomic load for memory ordering */
+    if (ucs_atomic_fadd32(&devices_discovered, 0)) {
+        return UCS_OK;
+    }
+
+    pthread_mutex_lock(&discovery_mutex);
+
+    /* Double-check after acquiring lock */
+    if (ucs_atomic_fadd32(&devices_discovered, 0)) {
+        goto out;
+    }
+
+    ucs_debug("starting Gaudi device discovery");
+
+    /* Enumerate devices by trying all possible module IDs */
+    for (i = 0; i < UCT_GAUDI_MAX_DEVICES; ++i) {
+        uct_gaudi_base_get_sys_dev_by_module(i, &sys_dev);
+        if (sys_dev != UCS_SYS_DEVICE_ID_UNKNOWN) {
+            /* Register with topology system using sequential naming */
+            ucs_snprintf_safe(device_name, sizeof(device_name), "GAUDI_%d",
+                              registered_devices);
+            status = ucs_topo_sys_device_set_name(sys_dev, device_name, 100);
+            if (status != UCS_OK) {
+                ucs_warn("failed to set name for Gaudi device module %d", i);
+                continue;
+            }
+
+            /* Store module ID in system device for later retrieval */
+            status = ucs_topo_sys_device_set_user_value(sys_dev, i);
+            if (status != UCS_OK) {
+                ucs_warn("failed to set user value for Gaudi device module %d",
+                         i);
+                continue;
+            }
+
+            registered_devices++;
+            ucs_debug("successfully registered module %d as %s (sys_dev %d)", i,
+                      device_name, sys_dev);
+        } else {
+            ucs_debug("module %d not available", i);
+        }
+    }
+
+    if (registered_devices > 0) {
+        ucs_debug("discovered %d Gaudi devices", registered_devices);
+        /* Use atomic store to ensure visibility to other threads */
+        ucs_atomic_add32(&devices_discovered, 1);
+        status = UCS_OK;
+    } else {
+        ucs_debug("no Gaudi devices found");
+        status = UCS_ERR_NO_DEVICE;
+    }
+
+out:
+    pthread_mutex_unlock(&discovery_mutex);
+    return status;
+}
+
+UCS_MODULE_INIT()
+{
+    return UCS_OK;
 }

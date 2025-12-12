@@ -210,7 +210,7 @@ ucs_status_t uct_gaudi_query_md_resources(uct_component_h component,
     /* Initialize Gaudi device discovery and topology registration */
     status = uct_gaudi_base_discover_devices();
     if (status != UCS_OK) {
-        ucs_debug("Gaudi device discovery failed, no devices available");
+        ucs_debug("gaudi device discovery failed, no devices available");
         return uct_md_query_empty_md_resource(resources_p, num_resources_p);
     }
 

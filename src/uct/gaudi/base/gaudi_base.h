@@ -6,10 +6,13 @@
 #ifndef UCT_GAUDI_BASE_H_
 #define UCT_GAUDI_BASE_H_
 
-#include <stdbool.h>
+#include "scal.h"
+
 #include <uct/base/uct_iface.h>
 #include <uct/base/uct_md.h>
-#include "scal.h"
+
+#include <stdbool.h>
+
 
 int uct_gaudi_base_get_fd(int device_id, bool *fd_created);
 
@@ -29,9 +32,5 @@ uct_gaudi_base_query_devices(uct_md_h md,
                              uct_tl_device_resource_t **tl_devices_p,
                              unsigned *num_tl_devices_p);
 
-/* Device discovery and topology registration */
 ucs_status_t uct_gaudi_base_discover_devices(void);
-void uct_gaudi_base_get_sys_dev_by_module(int module_id,
-                                          ucs_sys_device_t *sys_dev_p);
-
 #endif

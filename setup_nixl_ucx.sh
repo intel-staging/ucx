@@ -13,13 +13,9 @@ NIXL_BRANCH="0.7.0"
 
 # Device specific configuration
 if command -v nvidia-smi >/dev/null 2>&1; then
-	# CUDA configuration
-	with_gaudi=no
-	ucx_config_extra_kwargs="--with-cuda=/usr/local/cuda"
+	DEVICE="cuda"
 elif command -v hl-smi >/dev/null 2>&1; then
-	# HPU configuration
-	with_gaudi=yes
-	ucx_config_extra_kwargs=
+	DEVICE="hpu"
 else
 	echo "Unknown device, aborting install."
 	exit 1
@@ -30,7 +26,8 @@ echo "NIXL_DIR: $NIXL_DIR"
 
 echo "Installing prerequisites"
 apt-get update
-yes | apt install build-essential cmake pkg-config meson ninja-build autoconf libtool libcjson-dev libaio-dev pybind11-dev
+apt install -y build-essential cmake libibverbs1 libibverbs-dev librdmacm1 librdmacm-dev rdma-core \
+	pkg-config meson ninja-build autoconf libtool libcjson-dev libaio-dev pybind11-dev
 
 echo "Installing UCX ($UCX_BRANCH) to $UCX_INSTALL_DIR"
 ucx_root=$(dirname "$UCX_DIR")
@@ -38,8 +35,12 @@ mkdir -p "$ucx_root"
 [[ -d $UCX_DIR ]] || git clone -b "$UCX_BRANCH" "$UCX_REPO_URL" "$UCX_DIR"
 cd "$UCX_DIR"
 ./autogen.sh
-./configure --prefix="$UCX_INSTALL_DIR" --with-mlx5=no --with-gaudi=$with_gaudi --enable-examples --enable-mt $ucx_config_extra_kwargs
-make -j8 && make -j install-strip && ldconfig
+if [ "$DEVICE" == "hpu" ]; then
+	./configure --prefix="$UCX_INSTALL_DIR" --with-mlx5=no --with-gaudi=yes --enable-examples --enable-mt
+else
+	./configure --prefix="$UCX_INSTALL_DIR" --with-mlx5=no --with-gaudi=no --enable-examples --enable-mt --with-cuda=/usr/local/cuda
+fi
+make -j 8 && make -j install-strip && ldconfig
 
 echo "Installing NIXL ($NIXL_BRANCH) to $NIXL_DIR"
 nixl_root=$(dirname "$NIXL_DIR")

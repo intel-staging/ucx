@@ -48,8 +48,8 @@ ucs_status_t uct_ze_copy_ep_zcopy(uct_ep_h tl_ep, uint64_t remote_addr,
     ze_result_t ret;
     void *src, *dst;
 
-    ucs_trace("remote addr %p rkey %p size %zu", (void*)remote_addr,
-              (void*)rkey, size);
+    ucs_trace("ze_copy_ep: zcopy %s remote_addr %p local_buf %p size %zu",
+              is_put ? "PUT" : "GET", (void*)remote_addr, iov->buffer, size);
 
     if (is_put) {
         src = iov->buffer;

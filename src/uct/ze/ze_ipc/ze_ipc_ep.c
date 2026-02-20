@@ -8,9 +8,9 @@
 #endif
 
 #include "ze_ipc_ep.h"
+#include "ze_ipc_cache.h"
 #include "ze_ipc_iface.h"
 #include "ze_ipc_md.h"
-#include "ze_ipc_cache.h"
 
 #include <uct/base/uct_log.h>
 #include <uct/base/uct_iov.inl>
@@ -53,10 +53,6 @@ UCS_CLASS_DEFINE(uct_ze_ipc_ep_t, uct_base_ep_t)
 UCS_CLASS_DEFINE_NEW_FUNC(uct_ze_ipc_ep_t, uct_ep_t, const uct_ep_params_t*);
 UCS_CLASS_DEFINE_DELETE_FUNC(uct_ze_ipc_ep_t, uct_ep_t);
 
-#define uct_cuda_ipc_trace_data(_addr, _rkey, _fmt, ...) \
-    ucs_trace_data(_fmt " to %" PRIx64 "(%+ld)", ##__VA_ARGS__, (_addr), \
-                   (_rkey))
-
 int uct_ze_ipc_ep_is_connected(const uct_ep_h tl_ep,
                                const uct_ep_is_connected_params_t *params)
 {
@@ -73,23 +69,23 @@ static UCS_F_ALWAYS_INLINE ucs_status_t
 uct_ze_ipc_post_copy(uct_ep_h tl_ep, uint64_t remote_addr, const uct_iov_t *iov,
                      uct_rkey_t rkey, uct_completion_t *comp, int direction)
 {
-    uct_ze_ipc_iface_t *iface = ucs_derived_of(tl_ep->iface,
-                                               uct_ze_ipc_iface_t);
-    uct_ze_ipc_ep_t *ep       = ucs_derived_of(tl_ep, uct_ze_ipc_ep_t);
+    uct_ze_ipc_iface_t *iface            = ucs_derived_of(tl_ep->iface,
+                                                          uct_ze_ipc_iface_t);
+    uct_ze_ipc_ep_t *ep                  = ucs_derived_of(tl_ep,
+                                                          uct_ze_ipc_ep_t);
     uct_ze_ipc_unpacked_rkey_t *unpacked = (uct_ze_ipc_unpacked_rkey_t*)rkey;
     ze_event_pool_desc_t event_pool_desc = {};
     ze_event_desc_t event_desc_ze        = {};
     void *mapped_addr                    = NULL;
     uct_ze_ipc_queue_desc_t *q_desc;
     uct_ze_ipc_event_desc_t *event_desc;
+    ucs_status_t status;
     void *mapped_rem_addr;
     void *dst, *src;
     size_t offset;
-    ze_result_t ret;
-    ucs_status_t status;
-    int local_fd;
-    unsigned cmd_list_idx;
     size_t length;
+    unsigned cmd_list_idx;
+    int local_fd;
 
     length = uct_iov_get_length(iov);
     if (ucs_unlikely(length == 0)) {

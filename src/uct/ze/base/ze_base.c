@@ -316,6 +316,25 @@ uct_ze_base_get_device_handle_from_subdevice(const uct_ze_subdevice_t *subdevice
     return subdevice->device->subdevices[subdevice->subdevice_idx];
 }
 
+int
+uct_ze_base_get_subdevice_global_id_by_device_handle(ze_device_handle_t device)
+{
+    int i;
+
+    if ((uct_ze_base_init() != ZE_RESULT_SUCCESS) || (device == NULL)) {
+        return -1;
+    }
+
+    for (i = 0; i < ze_num_subdevices; i++) {
+        if (uct_ze_base_get_device_handle_from_subdevice(&ze_subdevices[i]) ==
+            device) {
+            return ze_subdevices[i].global_id;
+        }
+    }
+
+    return -1;
+}
+
 /**
  * Query MD resources - returns one MD per sub-device
  * This is correct because each sub-device has separate memory

@@ -18,27 +18,27 @@
 
 /* Level Zero (ZE) IPC MD descriptor */
 typedef struct uct_ze_ipc_md {
-    uct_md_t                 super;      /**< Domain info */
-    ze_context_handle_t      ze_context; /**< Level Zero context handle */
-    const uct_ze_subdevice_t *subdevice; /**< Level Zero sub-device descriptor */
-    ze_device_handle_t       ze_device;  /**< Level Zero device handle */
+    uct_md_t                 super;      /* Domain info */
+    ze_context_handle_t      ze_context; /* Level Zero context handle */
+    const uct_ze_subdevice_t *subdevice; /* Level Zero sub-device descriptor */
+    ze_device_handle_t       ze_device;  /* Level Zero device handle */
 } uct_ze_ipc_md_t;
 
 
 /* Level Zero (ZE) IPC domain configuration */
 typedef struct uct_ze_ipc_md_config {
-    uct_md_config_t super;          /**< Base MD configuration */
-    int             device_ordinal; /**< Level Zero device index (ordinal) */
+    uct_md_config_t super;          /* Base MD configuration */
+    int             device_ordinal; /* Level Zero device index (ordinal) */
 } uct_ze_ipc_md_config_t;
 
 
 /* Level Zero (ZE) IPC region registered for exposure */
 typedef struct uct_ze_ipc_lkey {
-    ze_ipc_mem_handle_t ph;      /**< IPC memory handle */
-    pid_t               pid;     /**< Process ID */
-    uintptr_t           d_bptr;  /**< Allocation base address */
-    size_t              b_len;   /**< Allocation size */
-    int                 dev_num; /**< Device number */
+    ze_ipc_mem_handle_t ph;      /* IPC memory handle */
+    pid_t               pid;     /* Process ID */
+    uintptr_t           d_bptr;  /* Allocation base address */
+    size_t              b_len;   /* Allocation size */
+    int                 dev_num; /* Device number */
 } uct_ze_ipc_lkey_t;
 
 
@@ -59,7 +59,6 @@ uct_ze_ipc_md_query(uct_md_h uct_md, uct_md_attr_v2_t *md_attr)
 
     md_attr->rkey_packed_size = sizeof(uct_ze_ipc_rkey_t);
     md_attr->flags            = UCT_MD_FLAG_REG | UCT_MD_FLAG_NEED_RKEY;
-
     md_attr->reg_mem_types    = UCS_BIT(UCS_MEMORY_TYPE_ZE_DEVICE);
     md_attr->cache_mem_types  = UCS_BIT(UCS_MEMORY_TYPE_ZE_DEVICE);
     md_attr->access_mem_types = UCS_BIT(UCS_MEMORY_TYPE_ZE_DEVICE);
@@ -236,6 +235,20 @@ static void uct_ze_ipc_md_close(uct_md_h uct_md)
     ucs_free(md);
 }
 
+ze_context_handle_t uct_ze_ipc_md_get_context(uct_md_h uct_md)
+{
+    uct_ze_ipc_md_t *md = ucs_derived_of(uct_md, uct_ze_ipc_md_t);
+
+    return md->ze_context;
+}
+
+ze_device_handle_t uct_ze_ipc_md_get_device(uct_md_h uct_md)
+{
+    uct_ze_ipc_md_t *md = ucs_derived_of(uct_md, uct_ze_ipc_md_t);
+
+    return md->ze_device;
+}
+
 static ucs_status_t
 uct_ze_ipc_md_open(uct_component_h component, const char *md_name,
                    const uct_md_config_t *uct_md_config, uct_md_h *uct_md)
@@ -266,7 +279,6 @@ uct_ze_ipc_md_open(uct_component_h component, const char *md_name,
     const uct_ze_subdevice_t *subdevice;
     uct_ze_ipc_md_t *md;
     ze_driver_handle_t ze_driver;
-    ze_result_t ret;
     ucs_status_t status;
 
     ze_driver = uct_ze_base_get_driver();
@@ -327,16 +339,17 @@ uct_component_t uct_ze_ipc_component = {
     .rkey_release       = uct_ze_ipc_rkey_release,
     .rkey_compare       = uct_base_rkey_compare,
     .name               = "ze_ipc",
-    .md_config =
+    .md_config          =
             {
-                    .name   = "ZE-IPC memory domain",
-                    .prefix = "ZE_IPC_",
-                    .table  = uct_ze_ipc_md_config_table,
-                    .size   = sizeof(uct_ze_ipc_md_config_t),
+                .name   = "ZE-IPC memory domain",
+                .prefix = "ZE_IPC_",
+                .table  = uct_ze_ipc_md_config_table,
+                .size   = sizeof(uct_ze_ipc_md_config_t),
             },
-    .cm_config   = UCS_CONFIG_EMPTY_GLOBAL_LIST_ENTRY,
-    .tl_list     = UCT_COMPONENT_TL_LIST_INITIALIZER(&uct_ze_ipc_component),
-    .flags       = 0,
-    .md_vfs_init = (uct_component_md_vfs_init_func_t)ucs_empty_function
+    .cm_config          = UCS_CONFIG_EMPTY_GLOBAL_LIST_ENTRY,
+    .tl_list            = UCT_COMPONENT_TL_LIST_INITIALIZER(
+            &uct_ze_ipc_component),
+    .flags              = 0,
+    .md_vfs_init        = (uct_component_md_vfs_init_func_t)ucs_empty_function
 };
 UCT_COMPONENT_REGISTER(&uct_ze_ipc_component);

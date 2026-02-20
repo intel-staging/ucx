@@ -13,12 +13,13 @@
 #include <level_zero/ze_api.h>
 
 
+#define UCT_ZE_IPC_MAX_CMD_LISTS 16
+
+
 extern uct_component_t uct_ze_ipc_component;
 
 
-/**
- * @brief Level Zero (ZE) IPC remote key for put/get
- */
+/* Level Zero (ZE) IPC remote key for put/get */
 typedef struct uct_ze_ipc_rkey {
     ze_ipc_mem_handle_t ph;      /**< IPC memory handle */
     pid_t               pid;     /**< Process ID */
@@ -28,13 +29,16 @@ typedef struct uct_ze_ipc_rkey {
 } uct_ze_ipc_rkey_t;
 
 
-/**
- * @brief Level Zero (ZE) IPC unpacked remote key
- */
+/* Level Zero (ZE) IPC unpacked remote key */
 typedef struct uct_ze_ipc_unpacked_rkey {
     uct_ze_ipc_rkey_t super;       /**< Base remote key */
     int               cmd_list_id; /**< Command list ID */
 } uct_ze_ipc_unpacked_rkey_t;
+
+
+ze_context_handle_t uct_ze_ipc_md_get_context(uct_md_h uct_md);
+
+ze_device_handle_t uct_ze_ipc_md_get_device(uct_md_h uct_md);
 
 
 #endif

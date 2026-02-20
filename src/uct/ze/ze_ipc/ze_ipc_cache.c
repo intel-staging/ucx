@@ -10,13 +10,16 @@
 #include "ze_ipc_cache.h"
 #include "ze_ipc_iface.h"
 
+#include <ucs/arch/atomic.h>
 #include <ucs/datastruct/list.h>
+#include <ucs/datastruct/khash.h>
 #include <ucs/datastruct/pgtable.h>
 #include <ucs/debug/log.h>
-#include <ucs/datastruct/khash.h>
+#include <ucs/profile/profile.h>
 #include <ucs/sys/sys.h>
 #include <ucs/sys/string.h>
 #include <ucs/sys/ptr_arith.h>
+#include <ucs/type/spinlock.h>
 
 #include <errno.h>
 #include <fcntl.h>
@@ -29,24 +32,25 @@
 #define UCT_ZE_IPC_PROC_PATH_MAX    64
 
 
+typedef struct uct_ze_ipc_cache uct_ze_ipc_cache_t;
 typedef struct uct_ze_ipc_cache_region uct_ze_ipc_cache_region_t;
 
 
 struct uct_ze_ipc_cache_region {
-    ucs_pgt_region_t    super;        /**< Base class - page table region */
-    ucs_list_link_t     list;         /**< List element */
-    uct_ze_ipc_rkey_t   key;          /**< Remote memory key */
-    void                *mapped_addr; /**< Local mapped address */
-    uint64_t            refcount;     /**< Track in-flight ops before unmapping*/
-    ze_context_handle_t ze_context;   /**< Level Zero context */
-    int                 dup_fd;       /**< Duplicated file descriptor */
+    ucs_pgt_region_t    super;        /* Base class - page table region */
+    ucs_list_link_t     list;         /* List element */
+    uct_ze_ipc_rkey_t   key;          /* Remote memory key */
+    void                *mapped_addr; /* Local mapped address */
+    uint64_t            refcount;     /* Track in-flight ops before unmapping*/
+    ze_context_handle_t ze_context;   /* Level Zero context */
+    int                 dup_fd;       /* Duplicated file descriptor */
 };
 
 
 struct uct_ze_ipc_cache {
-    pthread_rwlock_t lock;    /**< Protects the page table */
-    ucs_pgtable_t    pgtable; /**< Page table to hold the regions */
-    char             *name;   /**< Name */
+    pthread_rwlock_t lock;    /* Protects the page table */
+    ucs_pgtable_t    pgtable; /* Page table to hold the regions */
+    char             *name;   /* Name */
 };
 
 
@@ -80,6 +84,13 @@ typedef struct uct_ze_ipc_remote_cache {
 
 static uct_ze_ipc_remote_cache_t uct_ze_ipc_remote_cache;
 
+#if defined(__NR_pidfd_open) && defined(__NR_pidfd_getfd)
+static volatile uint32_t uct_ze_ipc_pidfd_globally_disabled;
+#endif
+
+static ucs_status_t
+uct_ze_ipc_cache_create(uct_ze_ipc_cache_t **cache, const char *name);
+
 static ucs_pgt_dir_t *
 uct_ze_ipc_cache_pgt_dir_alloc(const ucs_pgtable_t *pgtable)
 {
@@ -110,6 +121,27 @@ uct_ze_ipc_cache_region_collect_callback(const ucs_pgtable_t *pgtable,
     ucs_list_add_tail(list, &region->list);
 }
 
+static UCS_F_ALWAYS_INLINE void
+uct_ze_ipc_close_memhandle_safe(ze_context_handle_t ze_context,
+                                void **mapped_addr)
+{
+    ze_result_t ret;
+
+    if ((ze_context == NULL) || (mapped_addr == NULL) ||
+        (*mapped_addr == NULL)) {
+        return;
+    }
+
+    ret = zeMemCloseIpcHandle(ze_context, *mapped_addr);
+    if (ret != ZE_RESULT_SUCCESS) {
+        ucs_trace("zeMemCloseIpcHandle(ctx %p, addr %p) "
+                  "returned 0x%x during cleanup",
+                  (void*)ze_context, *mapped_addr, ret);
+    }
+
+    *mapped_addr = NULL;
+}
+
 static void uct_ze_ipc_cache_purge(uct_ze_ipc_cache_t *cache)
 {
     uct_ze_ipc_cache_region_t *region, *tmp;
@@ -119,8 +151,8 @@ static void uct_ze_ipc_cache_purge(uct_ze_ipc_cache_t *cache)
     ucs_pgtable_purge(&cache->pgtable, uct_ze_ipc_cache_region_collect_callback,
                       &region_list);
     ucs_list_for_each_safe(region, tmp, &region_list, list) {
-        UCT_ZE_FUNC_LOG_DEBUG(
-                zeMemCloseIpcHandle(region->ze_context, region->mapped_addr));
+        uct_ze_ipc_close_memhandle_safe(region->ze_context,
+                                        &region->mapped_addr);
         if (region->dup_fd >= 0) {
             close(region->dup_fd);
         }
@@ -129,7 +161,6 @@ static void uct_ze_ipc_cache_purge(uct_ze_ipc_cache_t *cache)
     }
     ucs_trace("%s: ze ipc cache purged", cache->name);
 }
-
 
 static int uct_ze_ipc_dup_fd_from_pid(uct_ze_ipc_iface_t *iface,
                                       pid_t remote_pid, int remote_fd)
@@ -160,6 +191,10 @@ static int uct_ze_ipc_dup_fd_from_pid(uct_ze_ipc_iface_t *iface,
 
     /* Cross-process: try pidfd with caching (Linux 5.6+) */
 #if defined(__NR_pidfd_open) && defined(__NR_pidfd_getfd)
+    if (ucs_atomic_fadd32(&uct_ze_ipc_pidfd_globally_disabled, 0)) {
+        goto fallback_proc;
+    }
+
     if (!iface || !iface->pidfd_cache) {
         goto fallback_proc;
     }
@@ -171,6 +206,21 @@ static int uct_ze_ipc_dup_fd_from_pid(uct_ze_ipc_iface_t *iface,
         /* Cache miss: open new pidfd */
         pidfd = syscall(__NR_pidfd_open, remote_pid, 0);
         if (pidfd < 0) {
+            if (errno == ENOSYS) {
+                if (ucs_atomic_swap32(&uct_ze_ipc_pidfd_globally_disabled, 1) ==
+                    0) {
+                    ucs_debug("pidfd_open not implemented (ENOSYS), "
+                              "disabling pidfd path globally");
+                }
+            }
+
+            if (errno == EPERM) {
+                ucs_debug("pidfd_open(%d) denied: check ptrace permissions "
+                          "and /proc/sys/kernel/yama/ptrace_scope; "
+                          "falling back to /proc",
+                          (int)remote_pid);
+            }
+
             goto fallback_proc; /* pidfd_open failed, try /proc */
         }
 
@@ -198,6 +248,12 @@ static int uct_ze_ipc_dup_fd_from_pid(uct_ze_ipc_iface_t *iface,
 
     /* pidfd_getfd failed - remote process likely exited */
     if (errno == ESRCH || errno == EPERM) {
+        if (errno == EPERM) {
+            ucs_debug("pidfd_getfd denied for pid %d fd %d: check ptrace "
+                      "permissions and /proc/sys/kernel/yama/ptrace_scope",
+                      remote_pid, remote_fd);
+        }
+
         ucs_debug("pidfd_getfd failed (pid %d exited?), removing from cache",
                   remote_pid);
         close(pidfd);
@@ -261,6 +317,11 @@ static ucs_status_t uct_ze_ipc_open_memhandle(uct_ze_ipc_iface_t *iface,
                                                     local_handle, 0,
                                                     mapped_addr));
     if (status != UCS_OK) {
+        ucs_debug("zeMemOpenIpcHandle context: pid %d dev_num %d "
+                  "base 0x%lx ctx %p dev %p fd %d",
+                  (int)key->pid, key->dev_num, key->d_bptr, (void*)ze_context,
+                  (void*)ze_device, *(int*)local_handle.data);
+
         if (*dup_fd >= 0) {
             close(*dup_fd);
             *dup_fd = UCT_ZE_IPC_CACHE_INVALID_FD;
@@ -291,8 +352,8 @@ static void uct_ze_ipc_cache_invalidate_regions(uct_ze_ipc_cache_t *cache,
                       (void*)region->key.d_bptr, ucs_status_string(status));
         }
 
-        UCT_ZE_FUNC_LOG_DEBUG(
-                zeMemCloseIpcHandle(region->ze_context, region->mapped_addr));
+        uct_ze_ipc_close_memhandle_safe(region->ze_context,
+                                        &region->mapped_addr);
         if (region->dup_fd >= 0) {
             close(region->dup_fd);
         }
@@ -325,7 +386,7 @@ static ucs_status_t uct_ze_ipc_get_remote_cache(pid_t pid,
         (khret == UCS_KH_PUT_BUCKET_CLEAR)) {
         ucs_snprintf_safe(target_name, sizeof(target_name), "dest:%d:%p",
                           key.pid, key.ze_context);
-        status = uct_ze_ipc_create_cache(cache, target_name);
+        status = uct_ze_ipc_cache_create(cache, target_name);
         if (status != UCS_OK) {
             kh_del(ze_ipc_rem_cache, &uct_ze_ipc_remote_cache.hash, khiter);
             ucs_error("could not create ze ipc cache: %s",
@@ -384,8 +445,8 @@ ucs_status_t uct_ze_ipc_unmap_memhandle(pid_t pid, uintptr_t address,
         }
 
         ucs_assert(region->mapped_addr == mapped_addr);
-        UCT_ZE_FUNC_LOG_DEBUG(
-                zeMemCloseIpcHandle(region->ze_context, region->mapped_addr));
+        uct_ze_ipc_close_memhandle_safe(region->ze_context,
+                                        &region->mapped_addr);
         if (region->dup_fd >= 0) {
             close(region->dup_fd);
         }
@@ -454,9 +515,9 @@ UCS_PROFILE_FUNC(ucs_status_t, uct_ze_ipc_map_memhandle,
 
     region->super.start = ucs_align_down_pow2((uintptr_t)key->d_bptr,
                                               UCS_PGT_ADDR_ALIGN);
-    region->super.end = ucs_align_up_pow2((uintptr_t)key->d_bptr + key->b_len,
-                                          UCS_PGT_ADDR_ALIGN);
-    region->key       = *key;
+    region->super.end   = ucs_align_up_pow2((uintptr_t)key->d_bptr +
+                                            key->b_len, UCS_PGT_ADDR_ALIGN);
+    region->key         = *key;
     region->mapped_addr = *mapped_addr;
     region->refcount    = 1;
     region->ze_context  = ze_context;
@@ -485,7 +546,7 @@ UCS_PROFILE_FUNC(ucs_status_t, uct_ze_ipc_map_memhandle,
     return UCS_OK;
 
 err_close_handle:
-    UCT_ZE_FUNC_LOG_DEBUG(zeMemCloseIpcHandle(ze_context, *mapped_addr));
+    uct_ze_ipc_close_memhandle_safe(ze_context, mapped_addr);
     if (*dup_fd >= 0) {
         close(*dup_fd);
         *dup_fd = UCT_ZE_IPC_CACHE_INVALID_FD;
@@ -496,8 +557,8 @@ err_unlock:
     return status;
 }
 
-ucs_status_t
-uct_ze_ipc_create_cache(uct_ze_ipc_cache_t **cache, const char *name)
+static ucs_status_t
+uct_ze_ipc_cache_create(uct_ze_ipc_cache_t **cache, const char *name)
 {
     ucs_status_t status;
     uct_ze_ipc_cache_t *cache_desc;
@@ -525,7 +586,7 @@ uct_ze_ipc_create_cache(uct_ze_ipc_cache_t **cache, const char *name)
         goto err_destroy_rwlock;
     }
 
-    cache_desc->name = ucs_strdup(name);
+    cache_desc->name = ucs_strdup(name, "ze_ipc_cache_name");
     if (cache_desc->name == NULL) {
         ucs_error("failed to duplicate cache name '%s'", name);
         status = UCS_ERR_NO_MEMORY;
@@ -544,7 +605,7 @@ err:
     return status;
 }
 
-void uct_ze_ipc_cache_destroy(uct_ze_ipc_cache_t *cache)
+static void uct_ze_ipc_cache_destroy(uct_ze_ipc_cache_t *cache)
 {
     uct_ze_ipc_cache_purge(cache);
     ucs_pgtable_cleanup(&cache->pgtable);

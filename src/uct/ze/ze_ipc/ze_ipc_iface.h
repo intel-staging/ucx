@@ -14,10 +14,6 @@
 #include <level_zero/ze_api.h>
 
 
-#define UCT_ZE_IPC_TL_NAME       "ze_ipc"
-#define UCT_ZE_IPC_MAX_CMD_LISTS 16
-
-
 typedef struct uct_ze_ipc_iface_config {
     uct_iface_config_t super;         /**< Base UCX interface configuration */
     unsigned           max_poll;      /**< Maximum poll attempts without progress */

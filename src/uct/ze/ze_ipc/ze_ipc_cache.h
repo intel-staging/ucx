@@ -12,20 +12,6 @@
 
 
 typedef struct uct_ze_ipc_iface uct_ze_ipc_iface_t;
-typedef struct uct_ze_ipc_cache uct_ze_ipc_cache_t;
-
-
-/**
- * @brief Create cache
- */
-ucs_status_t
-uct_ze_ipc_cache_create(uct_ze_ipc_cache_t **cache, const char *name);
-
-
-/**
- * @brief Destroy cache
- */
-void uct_ze_ipc_cache_destroy(uct_ze_ipc_cache_t *cache);
 
 
 /**

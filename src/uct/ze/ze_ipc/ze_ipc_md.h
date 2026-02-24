@@ -13,9 +13,6 @@
 #include <level_zero/ze_api.h>
 
 
-#define UCT_ZE_IPC_MAX_CMD_LISTS 16
-
-
 extern uct_component_t uct_ze_ipc_component;
 
 
@@ -31,8 +28,8 @@ typedef struct uct_ze_ipc_rkey {
 
 /* Level Zero (ZE) IPC unpacked remote key */
 typedef struct uct_ze_ipc_unpacked_rkey {
-    uct_ze_ipc_rkey_t super;       /**< Base remote key */
-    int               cmd_list_id; /**< Command list ID */
+    uct_ze_ipc_rkey_t super;     /**< Base remote key */
+    uint32_t          path_hash; /**< Deterministic transport path hash */
 } uct_ze_ipc_unpacked_rkey_t;
 
 

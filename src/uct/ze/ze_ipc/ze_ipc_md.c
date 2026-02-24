@@ -9,6 +9,7 @@
 
 #include "ze_ipc_md.h"
 
+#include <uct/ze/base/ze_base.h>
 #include <ucs/debug/log.h>
 #include <ucs/sys/sys.h>
 #include <ucs/type/class.h>
@@ -16,12 +17,132 @@
 #include <string.h>
 
 
+#define UCT_ZE_IPC_MD_MAX_ROOT_DEVICES 32
+#define UCT_ZE_IPC_MD_MAX_SUBDEVICES   8
+
+
+static ze_device_handle_t
+uct_ze_ipc_get_device_handle_by_global_id(ze_driver_handle_t ze_driver,
+                                           int global_id)
+{
+    ze_device_handle_t root_devices[UCT_ZE_IPC_MD_MAX_ROOT_DEVICES];
+    ze_device_handle_t subdevices[UCT_ZE_IPC_MD_MAX_SUBDEVICES];
+    uint32_t root_dev_count;
+    uint32_t subdev_count;
+    ze_device_handle_t root_device;
+    int global_idx = 0;
+    ze_result_t ret;
+    int i, j;
+
+    if (global_id < 0) {
+        return NULL;
+    }
+
+    root_dev_count = UCT_ZE_IPC_MD_MAX_ROOT_DEVICES;
+    ret = zeDeviceGet(ze_driver, &root_dev_count, root_devices);
+    if (ret != ZE_RESULT_SUCCESS) {
+        return NULL;
+    }
+
+    for (i = 0; i < (int)root_dev_count; i++) {
+        root_device  = root_devices[i];
+        subdev_count = 0;
+        ret          = zeDeviceGetSubDevices(root_device, &subdev_count, NULL);
+
+        if ((ret == ZE_RESULT_SUCCESS) && (subdev_count > 0)) {
+            if (subdev_count > UCT_ZE_IPC_MD_MAX_SUBDEVICES) {
+                subdev_count = UCT_ZE_IPC_MD_MAX_SUBDEVICES;
+            }
+
+            ret = zeDeviceGetSubDevices(root_device, &subdev_count,
+                                        subdevices);
+            if (ret != ZE_RESULT_SUCCESS) {
+                continue;
+            }
+
+            for (j = 0; j < (int)subdev_count; j++) {
+                if (global_idx == global_id) {
+                    return subdevices[j];
+                }
+
+                global_idx++;
+            }
+        } else {
+            if (global_idx == global_id) {
+                return root_device;
+            }
+
+            global_idx++;
+        }
+    }
+
+    return NULL;
+}
+
+static int
+uct_ze_ipc_get_subdevice_global_id_by_device_handle(ze_driver_handle_t ze_driver,
+                                                     ze_device_handle_t device)
+{
+    ze_device_handle_t root_devices[UCT_ZE_IPC_MD_MAX_ROOT_DEVICES];
+    ze_device_handle_t subdevices[UCT_ZE_IPC_MD_MAX_SUBDEVICES];
+    uint32_t root_dev_count;
+    uint32_t subdev_count;
+    ze_device_handle_t root_device;
+    int global_idx = 0;
+    ze_result_t ret;
+    int i, j;
+
+    if (device == NULL) {
+        return -1;
+    }
+
+    root_dev_count = UCT_ZE_IPC_MD_MAX_ROOT_DEVICES;
+    ret = zeDeviceGet(ze_driver, &root_dev_count, root_devices);
+    if (ret != ZE_RESULT_SUCCESS) {
+        return -1;
+    }
+
+    for (i = 0; i < (int)root_dev_count; i++) {
+        root_device  = root_devices[i];
+        subdev_count = 0;
+        ret          = zeDeviceGetSubDevices(root_device, &subdev_count, NULL);
+
+        if ((ret == ZE_RESULT_SUCCESS) && (subdev_count > 0)) {
+            if (subdev_count > UCT_ZE_IPC_MD_MAX_SUBDEVICES) {
+                subdev_count = UCT_ZE_IPC_MD_MAX_SUBDEVICES;
+            }
+
+            ret = zeDeviceGetSubDevices(root_device, &subdev_count,
+                                        subdevices);
+            if (ret != ZE_RESULT_SUCCESS) {
+                continue;
+            }
+
+            for (j = 0; j < (int)subdev_count; j++) {
+                if (subdevices[j] == device) {
+                    return global_idx;
+                }
+
+                global_idx++;
+            }
+        } else {
+            if (root_device == device) {
+                return global_idx;
+            }
+
+            global_idx++;
+        }
+    }
+
+    return -1;
+}
+
+
 /* Level Zero (ZE) IPC MD descriptor */
 typedef struct uct_ze_ipc_md {
-    uct_md_t                 super;      /* Domain info */
-    ze_context_handle_t      ze_context; /* Level Zero context handle */
-    const uct_ze_subdevice_t *subdevice; /* Level Zero sub-device descriptor */
-    ze_device_handle_t       ze_device;  /* Level Zero device handle */
+    uct_md_t            super;      /* Domain info */
+    ze_context_handle_t ze_context; /* Level Zero context handle */
+    ze_device_handle_t  ze_device;  /* Level Zero device handle */
 } uct_ze_ipc_md_t;
 
 
@@ -92,6 +213,7 @@ static ucs_status_t uct_ze_ipc_pack_lkey(uct_ze_ipc_md_t *md, void *address,
     };
     ucs_status_t status;
     ze_result_t ret;
+    ze_driver_handle_t ze_driver;
     void *base_address;
     size_t alloc_size;
     int global_id;
@@ -116,8 +238,14 @@ static ucs_status_t uct_ze_ipc_pack_lkey(uct_ze_ipc_md_t *md, void *address,
     }
 
     /* Find which subdevice this memory belongs to */
-    global_id = uct_ze_base_get_subdevice_global_id_by_device_handle(
-            alloc_device);
+    ze_driver = uct_ze_base_get_driver();
+    if (ze_driver == NULL) {
+        ucs_error("failed to get ze driver");
+        return UCS_ERR_NO_DEVICE;
+    }
+
+    global_id = uct_ze_ipc_get_subdevice_global_id_by_device_handle(
+            ze_driver, alloc_device);
     if (global_id < 0) {
         ucs_error("Could not find subdevice for allocation device %p",
                   (void*)alloc_device);
@@ -202,15 +330,15 @@ uct_ze_ipc_rkey_unpack(uct_component_t *component, const void *rkey_buffer,
     /* Copy packed data - no ownership transfer */
     unpacked->super = *packed;
 
-    /* Deterministic command list assignment for ordering */
-    unpacked->cmd_list_id = (packed->d_bptr >> 16) % UCT_ZE_IPC_MAX_CMD_LISTS;
+    /* Deterministic transport hash for endpoint-side queue selection */
+    unpacked->path_hash = (uint32_t)(packed->d_bptr >> 16);
 
     *handle_p = NULL;
     *rkey_p   = (uintptr_t)unpacked;
 
-    ucs_trace("unpacked rkey: dev %d addr 0x%lx cmd_list %d",
+    ucs_trace("unpacked rkey: dev %d addr 0x%lx path_hash 0x%x",
               unpacked->super.dev_num, unpacked->super.d_bptr,
-              unpacked->cmd_list_id);
+              unpacked->path_hash);
 
     return UCS_OK;
 }
@@ -276,7 +404,6 @@ uct_ze_ipc_md_open(uct_component_h component, const char *md_name,
     uct_ze_ipc_md_config_t *config = ucs_derived_of(uct_md_config,
                                                     uct_ze_ipc_md_config_t);
     ze_context_desc_t context_desc = {};
-    const uct_ze_subdevice_t *subdevice;
     uct_ze_ipc_md_t *md;
     ze_driver_handle_t ze_driver;
     ucs_status_t status;
@@ -291,24 +418,15 @@ uct_ze_ipc_md_open(uct_component_h component, const char *md_name,
         return UCS_ERR_NO_MEMORY;
     }
 
-    /* Get sub-device by device_ordinal (global sub-device ID) */
-    subdevice = uct_ze_base_get_subdevice_by_global_id(config->device_ordinal);
-    if (subdevice == NULL) {
-        ucs_error("failed to get sub-device at ordinal %d",
-                  config->device_ordinal);
-        ucs_free(md);
-        return UCS_ERR_NO_DEVICE;
-    }
-
-    md->ze_device = uct_ze_base_get_device_handle_from_subdevice(subdevice);
+    /* Get device handle by global sub-device ordinal */
+    md->ze_device = uct_ze_ipc_get_device_handle_by_global_id(
+            ze_driver, config->device_ordinal);
     if (md->ze_device == NULL) {
-        ucs_error("failed to get device handle for sub-device %d",
+        ucs_error("failed to get ze device handle at ordinal %d",
                   config->device_ordinal);
         ucs_free(md);
         return UCS_ERR_NO_DEVICE;
     }
-
-    md->subdevice = subdevice;
 
     status = UCT_ZE_FUNC_LOG_ERR(
             zeContextCreate(ze_driver, &context_desc, &md->ze_context));

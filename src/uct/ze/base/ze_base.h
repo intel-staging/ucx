@@ -33,6 +33,7 @@
 #define UCT_ZE_FUNC_LOG_ERR(_func)   UCT_ZE_FUNC(_func, UCS_LOG_LEVEL_ERROR)
 #define UCT_ZE_FUNC_LOG_DEBUG(_func) UCT_ZE_FUNC(_func, UCS_LOG_LEVEL_DEBUG)
 
+#define UCT_ZE_MAX_DEVICES    32
 #define UCT_ZE_MAX_SUBDEVICES 8
 
 /* Level Zero device (root device) with sub-devices */

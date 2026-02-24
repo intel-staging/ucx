@@ -65,16 +65,16 @@ KHASH_INIT(ze_ipc_pidfd_cache, pid_t, int, 1, kh_int_hash_func,
 
 
 typedef struct uct_ze_ipc_iface {
-    uct_base_iface_t            super;         /**< Base UCX interface */
-    ze_context_handle_t         ze_context;    /**< Level Zero execution context */
-    ze_device_handle_t          ze_device;     /**< Level Zero device */
-    uct_ze_ipc_iface_config_t   config;        /**< Interface configuration */
-    int                         eventfd;       /**< eventfd for async progress */
+    uct_base_iface_t            super;             /**< Base UCX interface */
+    ze_context_handle_t         ze_context;        /**< Level Zero execution context */
+    ze_device_handle_t          ze_device;         /**< Level Zero device */
+    uct_ze_ipc_iface_config_t   config;            /**< Interface configuration */
+    int                         eventfd;           /**< eventfd for async progress */
     uct_ze_ipc_queue_desc_t     queue_desc
-            [UCT_ZE_IPC_MAX_CMD_LISTS];        /**< Array of command list descriptors */
-    unsigned                    num_cmd_lists; /**< Number of created command lists */
-    khash_t(ze_ipc_pidfd_cache) *pidfd_cache;  /**< Pidfd cache */
-    uint32_t                    next_cmd_list; /**< Round-robin index for small transfers */
+            [UCT_ZE_IPC_MAX_CMD_LISTS];            /**< Array of command list descriptors */
+    unsigned                    num_cmd_lists;     /**< Number of created command lists */
+    khash_t(ze_ipc_pidfd_cache) *pidfd_cache;      /**< Pidfd cache */
+    uint32_t                    next_cmd_list;     /**< Round-robin index for small transfers */
     uint32_t                    next_progress_idx; /**< Round-robin index for progress scan */
 } uct_ze_ipc_iface_t;
 

@@ -15,8 +15,7 @@
 #include <ucs/sys/math.h>
 
 
-#define UCT_ZE_LOG_LEVEL   UCS_LOG_LEVEL_DEBUG
-#define UCT_ZE_MAX_DEVICES 32 /* Max root devices (GPUs) */
+#define UCT_ZE_LOG_LEVEL UCS_LOG_LEVEL_DEBUG
 
 
 /* Global state */

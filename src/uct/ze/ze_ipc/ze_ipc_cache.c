@@ -23,6 +23,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <string.h>
 #include <unistd.h>
 #include <sys/syscall.h>
@@ -415,46 +416,81 @@ ucs_status_t uct_ze_ipc_unmap_memhandle(pid_t pid, uintptr_t address,
                                         int dup_fd, int cache_enabled)
 {
     ucs_status_t status = UCS_OK;
+    int needs_remove = 0;
     uct_ze_ipc_cache_t *cache;
     ucs_pgt_region_t *pgt_region;
     uct_ze_ipc_cache_region_t *region;
+    uint64_t old_count;
+    uint64_t current_ref;
+
+    (void)dup_fd; /* unused */
 
     status = uct_ze_ipc_get_remote_cache(pid, ze_context, &cache);
     if (status != UCS_OK) {
         return status;
     }
 
-    /* use write lock because cache maybe modified */
-    pthread_rwlock_wrlock(&cache->lock);
+    /* PHASE 1: Lookup under read lock + CAS decrement */
+    pthread_rwlock_rdlock(&cache->lock);
     pgt_region = ucs_pgtable_lookup(&cache->pgtable, address);
     if (pgt_region == NULL) {
-        ucs_warn("address %p not found in cache", (void*)address);
         pthread_rwlock_unlock(&cache->lock);
+        ucs_warn("address %p not found in cache", (void*)address);
         return UCS_ERR_NO_ELEM;
     }
 
     region = ucs_derived_of(pgt_region, uct_ze_ipc_cache_region_t);
-    ucs_assert(region->refcount >= 1);
-    region->refcount--;
-
-    if (!region->refcount && !cache_enabled) {
-        status = ucs_pgtable_remove(&cache->pgtable, &region->super);
-        if (status != UCS_OK) {
-            ucs_error("failed to remove address:%p from cache (%s)",
-                      (void*)region->key.d_bptr, ucs_status_string(status));
+    do {
+        old_count = ucs_atomic_fadd64(&region->refcount, 0);
+        if (ucs_unlikely(old_count == 0)) {
+            pthread_rwlock_unlock(&cache->lock);
+            ucs_error("refcount underflow for address %p", (void*)address);
+            return UCS_ERR_INVALID_PARAM;
         }
+    } while (ucs_atomic_cswap64(
+        &region->refcount, old_count, old_count - 1) != old_count);
 
-        ucs_assert(region->mapped_addr == mapped_addr);
-        uct_ze_ipc_close_memhandle_safe(region->ze_context,
-                                        &region->mapped_addr);
-        if (region->dup_fd >= 0) {
-            close(region->dup_fd);
-        }
-
-        ucs_free(region);
+    if (old_count == 1) {
+        needs_remove = !cache_enabled;
     }
 
     pthread_rwlock_unlock(&cache->lock);
+
+    /* PHASE 2: Removal under write lock with verification */
+    if (needs_remove) {
+        pthread_rwlock_wrlock(&cache->lock);
+        pgt_region = ucs_pgtable_lookup(&cache->pgtable, address);
+        if (pgt_region != NULL) {
+            region = ucs_derived_of(pgt_region, uct_ze_ipc_cache_region_t);
+            current_ref = ucs_atomic_fadd64(&region->refcount, 0);
+            if ((region->mapped_addr == mapped_addr) &&
+                (current_ref == 0)) {
+                status = ucs_pgtable_remove(&cache->pgtable, &region->super);
+                pthread_rwlock_unlock(&cache->lock);
+
+                if (status != UCS_OK) {
+                    ucs_error("failed to remove address %p: %s",
+                              (void*)address, ucs_status_string(status));
+                    return status;
+                }
+
+                uct_ze_ipc_close_memhandle_safe(region->ze_context,
+                                                &region->mapped_addr);
+                if (region->dup_fd >= 0) {
+                    close(region->dup_fd);
+                }
+
+                ucs_free(region);
+                return UCS_OK;
+            }
+
+            ucs_debug("skipping removal: mapped_addr/refcount mismatch "
+                      "(addr=%p, expected=%p, refcount=%" PRIu64 ")",
+                      (void*)address, mapped_addr, current_ref);
+        }
+        pthread_rwlock_unlock(&cache->lock);
+    }
+
     return status;
 }
 

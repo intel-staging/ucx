@@ -31,20 +31,6 @@ typedef struct uct_ze_ipc_iface_config {
     double             overhead;           /**< Estimated CPU overhead */
 } uct_ze_ipc_iface_config_t;
 
-
-/* Queue descriptor for each command list */
-typedef struct uct_ze_ipc_queue_desc {
-    ze_command_list_handle_t cmd_list;       /**< Immediate command list */
-    ze_event_pool_handle_t   event_pool;     /**< Pre-created event pool */
-    ze_event_handle_t        events
-            [UCT_ZE_IPC_EVENTS_PER_CMDLIST]; /**< Pre-created events */
-    uint32_t                 event_put_idx;  /**< Next free event slot */
-    uint32_t                 event_get_idx;  /**< Next completion slot */
-    ucs_queue_head_t         event_queue;    /**< Queue of outstanding events */
-    ucs_recursive_spinlock_t lock;           /**< Protects queue and indices */
-} uct_ze_ipc_queue_desc_t;
-
-
 /* Event descriptor for async tracking */
 typedef struct uct_ze_ipc_event_desc {
     ze_event_handle_t      event;        /**< Level Zero event handle */
@@ -57,6 +43,22 @@ typedef struct uct_ze_ipc_event_desc {
     uintptr_t              address;      /**< Base address for cache lookup */
     uint32_t               event_idx;    /**< Index in queue descriptor event ring */
 } uct_ze_ipc_event_desc_t;
+
+
+/* Queue descriptor for each command list */
+typedef struct uct_ze_ipc_queue_desc {
+    ze_command_list_handle_t cmd_list;         /**< Immediate command list */
+    ze_event_pool_handle_t   event_pool;       /**< Pre-created event pool */
+    ze_event_handle_t        events
+            [UCT_ZE_IPC_EVENTS_PER_CMDLIST];   /**< Pre-created events */
+    uint32_t                 event_put_idx;    /**< Next free event slot */
+    uint32_t                 event_get_idx;    /**< Next completion slot */
+    ucs_queue_head_t         event_queue;      /**< Queue of outstanding events */
+    ucs_queue_head_t         free_event_descs; /**< Queue of available event descriptors */
+    ucs_recursive_spinlock_t lock;             /**< Protects queue and indices */
+    uct_ze_ipc_event_desc_t  event_descs
+            [UCT_ZE_IPC_EVENTS_PER_CMDLIST];   /**< Pre-allocated event descriptors */
+} uct_ze_ipc_queue_desc_t;
 
 
 /* Add hash type declaration before iface struct */

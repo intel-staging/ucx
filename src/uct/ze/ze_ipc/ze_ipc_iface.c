@@ -154,6 +154,7 @@ uct_ze_ipc_iface_progress_common(uct_ze_ipc_iface_t *iface, unsigned max_poll)
     unsigned count = 0;
     uct_ze_ipc_event_desc_t *event_desc;
     uct_ze_ipc_queue_desc_t *q_desc;
+    ucs_queue_elem_t *queue_elem;
     ucs_queue_iter_t q_iter;
     ucs_list_link_t local_completed;
     ucs_status_t status;
@@ -228,7 +229,11 @@ uct_ze_ipc_iface_progress_common(uct_ze_ipc_iface_t *iface, unsigned max_poll)
                 uct_invoke_completion(event_desc->comp, UCS_OK);
             }
 
-            ucs_free(event_desc);
+            ucs_recursive_spin_lock(&q_desc->lock);
+            queue_elem = &event_desc->queue;
+            queue_elem->next = NULL;
+            ucs_queue_push(&q_desc->free_event_descs, queue_elem);
+            ucs_recursive_spin_unlock(&q_desc->lock);
         }
     }
 
@@ -608,6 +613,12 @@ static UCS_CLASS_INIT_FUNC(uct_ze_ipc_iface_t, uct_md_h uct_md,
 
         /* Initialize event queue for this command list */
         ucs_queue_head_init(&self->queue_desc[i].event_queue);
+        ucs_queue_head_init(&self->queue_desc[i].free_event_descs);
+        for (j = 0; j < UCT_ZE_IPC_EVENTS_PER_CMDLIST; j++) {
+            self->queue_desc[i].event_descs[j].queue.next = NULL;
+            ucs_queue_push(&self->queue_desc[i].free_event_descs,
+                           &self->queue_desc[i].event_descs[j].queue);
+        }
         ucs_recursive_spinlock_init(&self->queue_desc[i].lock, 0);
     }
 
@@ -643,7 +654,7 @@ err_destroy_lists:
 static UCS_CLASS_CLEANUP_FUNC(uct_ze_ipc_iface_t)
 {
     uct_ze_ipc_event_desc_t *event_desc;
-    ucs_queue_iter_t q_iter;
+    ucs_queue_elem_t *queue_elem;
     khiter_t khiter;
     pid_t pid;
     unsigned i, j;
@@ -654,8 +665,10 @@ static UCS_CLASS_CLEANUP_FUNC(uct_ze_ipc_iface_t)
         ucs_recursive_spin_lock(&self->queue_desc[i].lock);
 
         /* wait for events to complete before destroying command list */
-        ucs_queue_for_each_safe(event_desc, q_iter,
-                                &self->queue_desc[i].event_queue, queue) {
+        while ((queue_elem = ucs_queue_pull(
+                        &self->queue_desc[i].event_queue)) != NULL) {
+            event_desc = ucs_container_of(queue_elem, uct_ze_ipc_event_desc_t,
+                                          queue);
             /* wait for event */
             zeEventHostSynchronize(event_desc->event, UINT64_MAX);
 
@@ -672,7 +685,6 @@ static UCS_CLASS_CLEANUP_FUNC(uct_ze_ipc_iface_t)
             }
 
             UCT_ZE_FUNC_LOG_DEBUG(zeEventHostReset(event_desc->event));
-            ucs_free(event_desc);
         }
 
         ucs_recursive_spin_unlock(&self->queue_desc[i].lock);

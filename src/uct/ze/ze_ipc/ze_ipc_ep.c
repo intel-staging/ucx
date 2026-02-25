@@ -76,6 +76,7 @@ uct_ze_ipc_post_copy(uct_ep_h tl_ep, uint64_t remote_addr, const uct_iov_t *iov,
                                                           uct_ze_ipc_ep_t);
     uct_ze_ipc_unpacked_rkey_t *unpacked = (uct_ze_ipc_unpacked_rkey_t*)rkey;
     void *mapped_addr                    = NULL;
+    int retried                          = 0;
     uct_ze_ipc_queue_desc_t *q_desc;
     uct_ze_ipc_event_desc_t *event_desc;
     ucs_status_t status;
@@ -86,7 +87,7 @@ uct_ze_ipc_post_copy(uct_ep_h tl_ep, uint64_t remote_addr, const uct_iov_t *iov,
     unsigned cmd_list_idx;
     uint32_t event_idx;
     int local_fd;
-    int retried = 0;
+    ucs_queue_elem_t *queue_elem;
 
     length = uct_iov_get_length(iov);
     if (ucs_unlikely(length == 0)) {
@@ -117,12 +118,6 @@ uct_ze_ipc_post_copy(uct_ep_h tl_ep, uint64_t remote_addr, const uct_iov_t *iov,
     offset          = remote_addr - unpacked->super.d_bptr;
     mapped_rem_addr = (void*)((uintptr_t)mapped_addr + offset);
 
-    event_desc = ucs_malloc(sizeof(*event_desc), "uct_ze_ipc_event_desc_t");
-    if (event_desc == NULL) {
-        status = UCS_ERR_NO_MEMORY;
-        goto err_unmap;
-    }
-
     /* Set up source and destination */
     if (direction == UCT_ZE_IPC_PUT) {
         dst = mapped_rem_addr;
@@ -145,8 +140,23 @@ retry_queue_slot:
             goto retry_queue_slot;
         }
         status = UCS_ERR_NO_RESOURCE;
-        goto err_free_desc;
+        goto err_unmap;
     }
+
+    queue_elem = ucs_queue_pull(&q_desc->free_event_descs);
+    if (ucs_unlikely(queue_elem == NULL)) {
+        ucs_recursive_spin_unlock(&q_desc->lock);
+        if (!retried) {
+            retried = 1;
+            uct_ze_ipc_iface_progress_nudge(iface, 1);
+            goto retry_queue_slot;
+        }
+
+        status = UCS_ERR_NO_RESOURCE;
+        goto err_unmap;
+    }
+
+    event_desc = ucs_container_of(queue_elem, uct_ze_ipc_event_desc_t, queue);
 
     event_idx = q_desc->event_put_idx % UCT_ZE_IPC_EVENTS_PER_CMDLIST;
 
@@ -163,9 +173,11 @@ retry_queue_slot:
             zeCommandListAppendMemoryCopy(q_desc->cmd_list, dst, src, length,
                                           event_desc->event, 0, NULL));
     if (status != UCS_OK) {
+        queue_elem->next = NULL;
+        ucs_queue_push(&q_desc->free_event_descs, queue_elem);
         ucs_recursive_spin_unlock(&q_desc->lock);
         status = UCS_ERR_IO_ERROR;
-        goto err_free_desc;
+        goto err_unmap;
     }
 
     /* Push event to queue */
@@ -181,8 +193,6 @@ retry_queue_slot:
 
     return UCS_INPROGRESS;
 
-err_free_desc:
-    ucs_free(event_desc);
 err_unmap:
     uct_ze_ipc_unmap_memhandle(ep->remote_pid, unpacked->super.d_bptr,
                                mapped_addr, iface->ze_context, local_fd,

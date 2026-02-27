@@ -416,7 +416,7 @@ ucs_status_t uct_ze_ipc_unmap_memhandle(pid_t pid, uintptr_t address,
                                         int dup_fd, int cache_enabled)
 {
     ucs_status_t status = UCS_OK;
-    int needs_remove = 0;
+    int needs_remove    = 0;
     uct_ze_ipc_cache_t *cache;
     ucs_pgt_region_t *pgt_region;
     uct_ze_ipc_cache_region_t *region;
@@ -430,7 +430,12 @@ ucs_status_t uct_ze_ipc_unmap_memhandle(pid_t pid, uintptr_t address,
         return status;
     }
 
-    /* PHASE 1: Lookup under read lock + CAS decrement */
+    /* PHASE 1: Lookup under read lock + CAS decrement.
+     * Use compare-swap loop to preserve the invariant that refcount is never
+     * decremented from zero. This may retry under contention; if retries become
+     * a measured bottleneck, reevaluate the fetch-add variant with underflow
+     * handling.
+     */
     pthread_rwlock_rdlock(&cache->lock);
     pgt_region = ucs_pgtable_lookup(&cache->pgtable, address);
     if (pgt_region == NULL) {

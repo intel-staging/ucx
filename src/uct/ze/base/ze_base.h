@@ -33,7 +33,6 @@
 #define UCT_ZE_FUNC_LOG_ERR(_func)   UCT_ZE_FUNC(_func, UCS_LOG_LEVEL_ERROR)
 #define UCT_ZE_FUNC_LOG_DEBUG(_func) UCT_ZE_FUNC(_func, UCS_LOG_LEVEL_DEBUG)
 
-#define UCT_ZE_MAX_DEVICES    32
 #define UCT_ZE_MAX_SUBDEVICES 8
 
 /* Level Zero device (root device) with sub-devices */
@@ -61,11 +60,11 @@ ze_driver_handle_t uct_ze_base_get_driver(void);
 
 const uct_ze_subdevice_t *uct_ze_base_get_subdevice_by_global_id(int global_id);
 
-int uct_ze_base_get_subdevice_global_id_by_device_handle(
-    ze_device_handle_t device);
-
 ze_device_handle_t uct_ze_base_get_device_handle_from_subdevice(
         const uct_ze_subdevice_t *subdevice);
+
+int uct_ze_base_get_subdevice_global_id_by_device_handle(
+    ze_device_handle_t device);
 
 ucs_status_t
 uct_ze_base_query_md_resources(uct_component_h component,

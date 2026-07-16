@@ -57,3 +57,12 @@ docker run --rm -it intel/ucx-ze-builder:<tag> bash
   accompanying SBOM).
 - UCX source: https://github.com/openucx/ucx
 - Level Zero source: https://github.com/oneapi-src/level-zero
+
+## Reporting a security vulnerability
+
+Report security vulnerabilities in these container images to the Intel Product
+Security Incident Response Team (PSIRT):
+https://www.intel.com/content/www/us/en/security-center/default.html
+
+For vulnerabilities in UCX itself, see the upstream project:
+https://github.com/openucx/ucx

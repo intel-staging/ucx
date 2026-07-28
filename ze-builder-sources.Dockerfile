@@ -11,8 +11,8 @@
 # binaries via its Ubuntu base and apt-installed packages, so the matching source
 # must be made available from a channel Intel controls. This image bundles that
 # source so it can be published next to ze-builder on the same registry
-# (Docker Hub, Intel namespace), e.g.
-#   intel/hpcx/x86_64/ubuntu24.04/ze-builder-sources
+# (Docker Hub, Intel namespace):
+#   intel/ucx-ze-builder-sources   (alongside intel/ucx-ze-builder)
 # The ze-builder Docker Hub description links here and carries the Ubuntu
 # demo-only / Ubuntu Pro disclaimer.
 #

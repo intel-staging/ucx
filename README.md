@@ -6,12 +6,10 @@ Intel-side license-compliance tooling for the `ze-builder` container image.
 
 `ze-builder-sources.Dockerfile` builds a companion source image that provides
 the matching source code for the GPL/LGPL and other Ubuntu-archive packages
-distributed in the `ze-builder` image. It is published alongside `ze-builder`
-on the same Docker Hub registry, under the matching repository name with a
-`-sources` suffix (e.g. `<ze-builder-repo>-sources`), so the sources are
-available from a channel Intel controls, satisfying the open source
-source-distribution obligations. The exact repository path is fixed when the
-image is published.
+distributed in the `ze-builder` image. It is published as
+`intel/ucx-ze-builder-sources` on Docker Hub, alongside the product image
+`intel/ucx-ze-builder`, so the sources are available from a channel Intel
+controls, satisfying the open source source-distribution obligations.
 
 The package set is enumerated **from the built `ze-builder` image itself**
 (`dpkg-query`), so the sources always match the exact versions shipped — there

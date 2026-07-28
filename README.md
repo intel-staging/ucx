@@ -26,10 +26,19 @@ is no hand-maintained package list to keep in sync.
 
 ## Build
 
+`ZE_BUILDER_IMAGE` must point at the already-built product image; its default
+(`ze-builder:local`) is only a local-dev convenience and is overridden at
+publish time with the real image reference.
+
 ```bash
-# after ze-builder is built or pulled:
+# Local dev (product image built locally as ze-builder:local):
 docker build -t ze-builder-sources:local \
     --build-arg ZE_BUILDER_IMAGE=ze-builder:local \
+    -f ze-builder-sources.Dockerfile .
+
+# Publish (product image is intel/ucx-ze-builder:<tag>):
+docker build -t intel/ucx-ze-builder-sources:<tag> \
+    --build-arg ZE_BUILDER_IMAGE=intel/ucx-ze-builder:<tag> \
     -f ze-builder-sources.Dockerfile .
 ```
 

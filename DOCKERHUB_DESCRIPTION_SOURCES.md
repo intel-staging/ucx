@@ -18,6 +18,16 @@ channel, satisfying open source source-distribution (copyleft) obligations.
   `intel/ucx-ze-builder`, under `/sources`, fetched with `apt-get source` at the
   exact installed versions.
 
+## License
+
+Each source package in this image is provided under its own upstream license
+(for example GPL-2.0/3.0, LGPL-2.1, BSD, MIT, and others), as published in the
+Ubuntu archive. This image redistributes unmodified upstream source solely to
+satisfy source-distribution obligations; Intel adds no code here.
+
+Full license and copyright details for every included component are in
+`/sources/third-party-programs.txt`.
+
 ## Related
 
 - Product image: **`intel/ucx-ze-builder`**

@@ -47,14 +47,21 @@ docker run --rm -it intel/ucx-ze-builder:<tag> bash
   or security fixes are needed. Pull the latest tag to update; images are
   immutable per tag.
 
-## Source code / license obligations
+## License
 
-- Source for the open source packages distributed in this image is available in
-  the companion image **`intel/ucx-ze-builder-sources`**, published on this same
-  registry.
-- The Dockerfile is licensed under **BSD-3-Clause**. Third-party components
-  retain their respective licenses (see the companion sources image and the
-  accompanying SBOM).
+The Dockerfile for this image is licensed under **BSD-3-Clause**. Third-party
+components included in the image retain their respective upstream licenses.
+
+## Sources and Third Party Notices
+
+This distribution includes components licensed under copyleft licenses (GPL,
+LGPL, and others). The complete corresponding source code for these components
+is provided in a separate sources image on Docker Hub:
+**`intel/ucx-ze-builder-sources`**.
+
+See `/sources/third-party-programs.txt` in the sources image for details on the
+included components and their licenses.
+
 - UCX source: https://github.com/openucx/ucx
 - Level Zero source: https://github.com/oneapi-src/level-zero
 

@@ -27,13 +27,37 @@
 # The already-built product image whose packages we must provide source for.
 ARG ZE_BUILDER_IMAGE=ze-builder:local
 
-# 1. Snapshot the exact installed package list from the product image.
+# 1. Snapshot the exact installed package list from the product image, and
+#    build a third-party notice file from each package's shipped copyright text.
 FROM ${ZE_BUILDER_IMAGE} AS product
 RUN dpkg-query -W -f='${Package}\t${Version}\n' > /tmp/pkglist.tsv
+RUN set -eux; \
+    { \
+        echo "Third-Party Programs and Licenses"; \
+        echo "Components distributed in intel/ucx-ze-builder and intel/ucx-ze-builder-sources."; \
+        echo "Each component is listed with its version and the license/copyright text"; \
+        echo "shipped by the package."; \
+        echo "================================================================"; \
+        echo; \
+        for pkg in $(dpkg-query -W -f='${Package}\n' | sort); do \
+            ver="$(dpkg-query -W -f='${Version}' "$pkg" 2>/dev/null)"; \
+            echo "================================================================"; \
+            echo "Package: $pkg"; \
+            echo "Version: $ver"; \
+            echo "----------------------------------------------------------------"; \
+            if [ -f "/usr/share/doc/$pkg/copyright" ]; then \
+                cat "/usr/share/doc/$pkg/copyright"; \
+            else \
+                echo "(no copyright file found in package)"; \
+            fi; \
+            echo; \
+        done; \
+    } > /tmp/third-party-programs.txt
 
 # 2. Fetch matching source on a clean Ubuntu base with deb-src enabled.
 FROM ubuntu:24.04 AS sources
 COPY --from=product /tmp/pkglist.tsv /sources/pkglist.tsv
+COPY --from=product /tmp/third-party-programs.txt /sources/third-party-programs.txt
 
 # Enable source repositories (24.04 uses the deb822 .sources format).
 RUN set -eux; \

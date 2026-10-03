@@ -347,7 +347,8 @@ gtest_CPPFLAGS += \
 gtest_LDFLAGS += \
 	$(ZE_LDFLAGS)
 gtest_LDADD += \
-	$(ZE_LIBS)
+	$(ZE_LIBS) \
+	$(top_builddir)/src/uct/ze/libuct_ze.la
 endif
 
 noinst_HEADERS = \
